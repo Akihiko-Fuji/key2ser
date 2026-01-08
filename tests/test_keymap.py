@@ -13,3 +13,8 @@ def test_keymap_maps_symbols_with_shift() -> None:
 
 def test_keymap_returns_none_for_unknown_key() -> None:
     assert DEFAULT_KEYMAP.map_keycode("KEY_UNKNOWN", shift=False) is None
+
+
+def test_keymap_maps_kana_mode() -> None:
+    assert DEFAULT_KEYMAP.map_keycode("KEY_A", shift=False, kana=True) == "ﾁ"
+    assert DEFAULT_KEYMAP.map_keycode("KEY_7", shift=True, kana=True) == "ｬ"
