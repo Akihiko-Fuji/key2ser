@@ -1,18 +1,27 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 
 SHIFT_KEYCODES = {"KEY_LEFTSHIFT", "KEY_RIGHTSHIFT"}
-
+KANA_TOGGLE_KEYCODES = {"KEY_KANA", "KEY_KATAKANA", "KEY_HIRAGANA", "KEY_KATAKANAHIRAGANA"}
 
 @dataclass(frozen=True)
 class KeyMapper:
     unshifted: Dict[str, str]
     shifted: Dict[str, str]
-
-    def map_keycode(self, keycode: str, shift: bool) -> Optional[str]:
+    kana_unshifted: Dict[str, str] = field(default_factory=dict)
+    kana_shifted: Dict[str, str] = field(default_factory=dict)
+    
+    def map_keycode(self, keycode: str, shift: bool, *, kana: bool = False) -> Optional[str]:
+        if kana:
+            mapped = self.kana_shifted.get(keycode) if shift else self.kana_unshifted.get(keycode)
+            if mapped is not None:
+                return mapped
+            fallback = self.kana_unshifted.get(keycode)
+            if fallback is not None:
+                return fallback
         if shift:
             return self.shifted.get(keycode) or self.unshifted.get(keycode)
         return self.unshifted.get(keycode)
@@ -26,6 +35,8 @@ DEFAULT_KEYMAP = KeyMapper(
         "KEY_LEFTBRACE": "[",
         "KEY_RIGHTBRACE": "]",
         "KEY_BACKSLASH": "\\",
+        "KEY_YEN": "¥",
+        "KEY_RO": "\\",
         "KEY_SEMICOLON": ";",
         "KEY_APOSTROPHE": "'",
         "KEY_GRAVE": "`",
@@ -75,6 +86,8 @@ DEFAULT_KEYMAP = KeyMapper(
         "KEY_LEFTBRACE": "{",
         "KEY_RIGHTBRACE": "}",
         "KEY_BACKSLASH": "|",
+        "KEY_YEN": "|",
+        "KEY_RO": "_",
         "KEY_SEMICOLON": ":",
         "KEY_APOSTROPHE": '"',
         "KEY_GRAVE": "~",
@@ -117,5 +130,68 @@ DEFAULT_KEYMAP = KeyMapper(
         "KEY_X": "X",
         "KEY_Y": "Y",
         "KEY_Z": "Z",
+    },
+    kana_unshifted={
+        "KEY_SPACE": " ",
+        "KEY_1": "ﾇ",
+        "KEY_2": "ﾌ",
+        "KEY_3": "ｱ",
+        "KEY_4": "ｳ",
+        "KEY_5": "ｴ",
+        "KEY_6": "ｵ",
+        "KEY_7": "ﾔ",
+        "KEY_8": "ﾕ",
+        "KEY_9": "ﾖ",
+        "KEY_0": "ﾜ",
+        "KEY_MINUS": "ﾎ",
+        "KEY_EQUAL": "ﾍ",
+        "KEY_BACKSLASH": "ｰ",
+        "KEY_YEN": "ｰ",
+        "KEY_Q": "ﾀ",
+        "KEY_W": "ﾃ",
+        "KEY_E": "ｲ",
+        "KEY_R": "ｽ",
+        "KEY_T": "ｶ",
+        "KEY_Y": "ﾝ",
+        "KEY_U": "ﾅ",
+        "KEY_I": "ﾆ",
+        "KEY_O": "ﾗ",
+        "KEY_P": "ｾ",
+        "KEY_LEFTBRACE": "ﾞ",
+        "KEY_RIGHTBRACE": "ﾟ",
+        "KEY_A": "ﾁ",
+        "KEY_S": "ﾄ",
+        "KEY_D": "ｼ",
+        "KEY_F": "ﾊ",
+        "KEY_G": "ｷ",
+        "KEY_H": "ｸ",
+        "KEY_J": "ﾏ",
+        "KEY_K": "ﾉ",
+        "KEY_L": "ﾘ",
+        "KEY_SEMICOLON": "ﾚ",
+        "KEY_APOSTROPHE": "ｹ",
+        "KEY_Z": "ﾂ",
+        "KEY_X": "ｻ",
+        "KEY_C": "ｿ",
+        "KEY_V": "ﾋ",
+        "KEY_B": "ｺ",
+        "KEY_N": "ﾐ",
+        "KEY_M": "ﾓ",
+        "KEY_COMMA": "ﾈ",
+        "KEY_DOT": "ﾙ",
+        "KEY_SLASH": "ﾒ",
+        "KEY_RO": "ﾛ",
+    },
+    kana_shifted={
+        "KEY_3": "ｧ",
+        "KEY_4": "ｩ",
+        "KEY_5": "ｪ",
+        "KEY_6": "ｫ",
+        "KEY_7": "ｬ",
+        "KEY_8": "ｭ",
+        "KEY_9": "ｮ",
+        "KEY_0": "ｦ",
+        "KEY_Z": "ｯ",
+        "KEY_SLASH": "･",
     },
 )
