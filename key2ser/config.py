@@ -60,6 +60,15 @@ def _get_bool(parser: configparser.ConfigParser, section: str, option: str, defa
     return parser.getboolean(section, option)
 
 
+def _parse_line_end(line_end: str, *, line_end_mode: str) -> str:
+    if line_end_mode == "literal":
+        return line_end
+    try:
+        return bytes(line_end, "utf-8").decode("unicode_escape")
+    except UnicodeDecodeError as exc:
+        raise ValueError("output.line_end に無効なエスケープシーケンスがあります。") from exc
+
+
 def load_config(path: Path) -> AppConfig:
     parser = configparser.ConfigParser()
     if not path.exists():
@@ -79,7 +88,11 @@ def load_config(path: Path) -> AppConfig:
     timeout = parser.getfloat("serial", "timeout", fallback=1.0)
 
     encoding = parser.get("output", "encoding", fallback="utf-8").strip()
+    line_end_mode = parser.get("output", "line_end_mode", fallback="literal").strip().lower() or "literal"
+    if line_end_mode not in {"literal", "escape"}:
+        raise ValueError("output.line_end_mode は literal / escape のいずれかを指定してください。")
     line_end = parser.get("output", "line_end", fallback="\r\n")
+    line_end = _parse_line_end(line_end, line_end_mode=line_end_mode)
     send_on_enter = _get_bool(parser, "output", "send_on_enter", True)
     send_mode = parser.get("output", "send_mode", fallback="on_enter").strip().lower() or "on_enter"
     if send_mode not in {"on_enter", "per_char", "idle_timeout"}:
@@ -100,6 +113,7 @@ def load_config(path: Path) -> AppConfig:
         output=OutputConfig(
             encoding=encoding,
             line_end=line_end,
+            line_end_mode=line_end_mode,
             send_on_enter=send_on_enter,
             send_mode=send_mode,
             idle_timeout_seconds=idle_timeout_seconds,
