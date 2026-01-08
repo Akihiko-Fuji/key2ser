@@ -24,6 +24,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     return parser
 
+
 def _unsupported_platform_message(platform: str) -> str | None:
     if platform.startswith("win"):
         return "Windows では対応していません。Linux (evdev) 環境で実行してください。"
