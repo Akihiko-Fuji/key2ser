@@ -26,6 +26,7 @@ class SerialConfig:
 class OutputConfig:
     encoding: str
     line_end: str
+    line_end_mode: str
     send_on_enter: bool
     send_mode: str
     idle_timeout_seconds: float
