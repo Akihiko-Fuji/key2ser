@@ -47,6 +47,7 @@ timeout=1
 
 [output]
 encoding=utf-8
+line_end_mode=escape
 line_end=\r\n
 send_on_enter=true
 send_mode=on_enter
@@ -59,6 +60,9 @@ idle_timeout_seconds=0.5
   - `on_enter`: Enter を受信したタイミングでバッファを送信します（バーコードリーダー向けの既定値）。Enter キー自体は送信せず、末尾には `line_end` を付与します。
   - `per_char`: 入力された文字を都度送信します。
   - `idle_timeout`: 入力が止まってから `idle_timeout_seconds` 秒経過したら送信します。
+- `line_end_mode` は `line_end` の解釈方法を指定します。
+  - `literal`: そのまま送信します。
+  - `escape`: `\r` や `\n` といったエスケープシーケンスを実際の改行として解釈します。
 - `send_on_enter` は `send_mode=on_enter` のときのみ有効で、Enter のみが入力された場合でも空文字を送信するかどうかを指定します。
 - `idle_timeout_seconds` は `send_mode=idle_timeout` のときに使用する待機時間（秒）です。
 
