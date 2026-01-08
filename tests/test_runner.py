@@ -14,6 +14,7 @@ serial_stub = types.ModuleType("serial")
 serial_stub.Serial = object
 sys.modules.setdefault("serial", serial_stub)
 
+from key2ser.config import AppConfig, InputConfig, OutputConfig, SerialConfig
 from key2ser import runner
 
 
@@ -97,3 +98,71 @@ def test_runner_on_enter_unchanged() -> None:
     )
 
     assert payload == "a\r\n"
+
+
+def test_run_event_loop_default_sends_on_enter(monkeypatch) -> None:
+    class DummyPort:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        def write(self, data: bytes) -> None:
+            self.writes.append(data)
+
+        def flush(self) -> None:
+            return None
+
+        def __enter__(self) -> "DummyPort":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class DummyKeyEvent:
+        key_down = 1
+        key_up = 0
+
+        def __init__(self, keycode: str, keystate: int) -> None:
+            self.keycode = keycode
+            self.keystate = keystate
+
+    class DummyEvent:
+        def __init__(self, keycode: str, keystate: int) -> None:
+            self.type = runner.ecodes.EV_KEY
+            self.keycode = keycode
+            self.keystate = keystate
+
+    class DummyDevice:
+        path = "/dev/input/event0"
+
+        def read_loop(self):
+            yield DummyEvent("KEY_A", DummyKeyEvent.key_down)
+            yield DummyEvent("KEY_ENTER", DummyKeyEvent.key_down)
+
+    dummy_port = DummyPort()
+
+    monkeypatch.setattr(runner, "_open_serial_port", lambda config: dummy_port)
+    monkeypatch.setattr(runner, "_log_device_info", lambda device, config: None)
+    monkeypatch.setattr(runner, "categorize", lambda event: DummyKeyEvent(event.keycode, event.keystate))
+
+    config = AppConfig(
+        input=InputConfig(
+            mode="evdev",
+            device="/dev/input/event0",
+            vendor_id=None,
+            product_id=None,
+            grab=False,
+        ),
+        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        output=OutputConfig(
+            encoding="utf-8",
+            line_end="\r\n",
+            line_end_mode="literal",
+            send_on_enter=True,
+            send_mode="on_enter",
+            idle_timeout_seconds=0.5,
+        ),
+    )
+
+    runner._run_event_loop_default(config, DummyDevice(), keymap=runner.DEFAULT_KEYMAP)
+
+    assert dummy_port.writes == [b"a\r\n"]
