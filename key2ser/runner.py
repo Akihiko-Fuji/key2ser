@@ -9,7 +9,7 @@ from evdev import InputDevice, categorize, ecodes, list_devices
 import serial
 
 from key2ser.config import AppConfig, InputConfig
-from key2ser.keymap import DEFAULT_KEYMAP, SHIFT_KEYCODES, KeyMapper
+from key2ser.keymap import DEFAULT_KEYMAP, KANA_TOGGLE_KEYCODES, SHIFT_KEYCODES, KeyMapper
 
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 class BufferState:
     text: str = ""
     shift_keys: Set[str] = field(default_factory=set)
+    kana_mode: bool = False
 
     @property
     def shift_active(self) -> bool:
@@ -82,6 +83,9 @@ def _handle_key_down(
     if keycode in SHIFT_KEYCODES:
         state.shift_keys.add(keycode)
         return None
+    if keycode in KANA_TOGGLE_KEYCODES:
+        state.kana_mode = not state.kana_mode
+        return None
     if keycode == "KEY_ENTER":
         # バーコードリーダーはEnterで終端することが多いため、ここでまとめて送信する。
         payload = state.text + line_end
@@ -93,7 +97,7 @@ def _handle_key_down(
     if keycode == "KEY_BACKSPACE":
         state.text = state.text[:-1]
         return None
-    mapped = keymap.map_keycode(keycode, state.shift_active)
+    mapped = keymap.map_keycode(keycode, state.shift_active, kana=state.kana_mode)
     if mapped:
         state.text += mapped
     else:
