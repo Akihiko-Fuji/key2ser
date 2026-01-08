@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-        platform_message = _unsupported_platform_message(sys.platform)
+    platform_message = _unsupported_platform_message(sys.platform)
     if platform_message is not None:
         logging.error("%s", platform_message)
         return 1
