@@ -157,6 +157,8 @@ def _maybe_flush_idle_timeout(
     state.text = ""
     state.last_input_time = None
     return payload
+
+
 def _process_key_event(
     event,
     *,
@@ -237,6 +239,7 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
 
 
 def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: KeyMapper) -> None:
+    state = BufferState()
     with _open_serial_port(config) as port:
         _log_device_info(device, config)
         for event in device.read_loop():
