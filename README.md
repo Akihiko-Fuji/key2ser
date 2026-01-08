@@ -54,6 +54,12 @@ idle_timeout_seconds=0.5
 
 - `vendor_id` と `product_id` を両方指定すると該当デバイスのみを使用します。
 - `device` を指定すると特定の `/dev/input/event*` を優先します。
+- `send_mode` は送信タイミングを指定します。
+  - `on_enter`: Enter を受信したタイミングでバッファを送信します（バーコードリーダー向けの既定値）。
+  - `per_char`: 入力された文字を都度送信します。
+  - `idle_timeout`: 入力が止まってから `idle_timeout_seconds` 秒経過したら送信します。
+- `send_on_enter` は `send_mode=on_enter` のときのみ有効で、Enter のみが入力された場合でも空文字を送信するかどうかを指定します。
+- `idle_timeout_seconds` は `send_mode=idle_timeout` のときに使用する待機時間（秒）です。
 
 ## 実行方法
 
