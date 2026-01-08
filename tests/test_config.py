@@ -49,3 +49,24 @@ line_end=\r\n
 
     with pytest.raises(ValueError, match="serial.port is required"):
         load_config(config_file)
+
+
+def test_load_config_supports_line_end_escape(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+
+[output]
+line_end_mode=escape
+line_end=\\r\\n
+""".strip()
+    )
+
+    config = load_config(config_file)
+
+    assert config.output.line_end == "\r\n"
