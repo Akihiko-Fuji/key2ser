@@ -50,11 +50,54 @@ idle_timeout_seconds=0.5
 - `vendor_id` と `product_id` を両方指定すると該当デバイスのみを使用します。
 - `device` を指定すると特定の `/dev/input/event*` を優先します。
 
-## 実行
+## 実行方法
 
 ```bash
 python3 key2ser.py --config config.ini
 ```
+
+## 起動時に常駐する方法（systemd）
+
+1. サービスファイルを作成します。
+
+```bash
+sudo tee /etc/systemd/system/key2ser.service > /dev/null <<'EOF'
+[Unit]
+Description=key2ser HID to Serial bridge
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=input
+WorkingDirectory=/path/to/key2ser
+ExecStart=/path/to/key2ser/.venv/bin/python /path/to/key2ser/key2ser.py --config /path/to/key2ser/config.ini
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+2. 反映して起動します。
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now key2ser.service
+```
+
+3. 設定変更後は再起動で反映します。
+
+```bash
+sudo systemctl restart key2ser.service
+```
+
+ログ確認は次で行えます。
+
+```bash
+journalctl -u key2ser.service -f
+```
+
 
 ## 権限
 
