@@ -43,6 +43,8 @@ timeout=1
 encoding=utf-8
 line_end=\r\n
 send_on_enter=true
+send_mode=on_enter
+idle_timeout_seconds=0.5
 ```
 
 - `vendor_id` と `product_id` を両方指定すると該当デバイスのみを使用します。
