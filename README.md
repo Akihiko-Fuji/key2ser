@@ -1,2 +1,59 @@
 # key2ser
+
 Keyboard to Virtual Serial port for Raspberry Pi OS
+
+## 概要
+
+Raspberry Pi OS で HID デバイス（バーコードリーダーなど）を特定の VID/PID に限定し、取得したキー入力を仮想シリアルポートへ送信します。
+
+## セットアップ
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 仮想シリアルポートの作成例
+
+```bash
+socat -d -d pty,raw,echo=0,link=/dev/ttyV0 pty,raw,echo=0,link=/dev/ttyV1
+```
+
+送信側が `/dev/ttyV0`、受信側が `/dev/ttyV1` になります。
+
+## 設定ファイル
+
+`config.ini` を編集して、入力デバイスと送信先を指定します。
+
+```ini
+[input]
+mode=evdev
+# device=/dev/input/event3
+vendor_id=0x1234
+product_id=0xabcd
+# grab=true
+
+[serial]
+port=/dev/ttyV0
+baudrate=9600
+timeout=1
+
+[output]
+encoding=utf-8
+line_end=\r\n
+send_on_enter=true
+```
+
+- `vendor_id` と `product_id` を両方指定すると該当デバイスのみを使用します。
+- `device` を指定すると特定の `/dev/input/event*` を優先します。
+
+## 実行
+
+```bash
+python3 key2ser.py --config config.ini
+```
+
+## 権限
+
+`/dev/input/event*` へアクセスするため、`input` グループへユーザーを追加するか、root で実行してください。
