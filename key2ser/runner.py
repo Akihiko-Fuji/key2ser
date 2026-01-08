@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 from pathlib import Path
+import select
+import time
 from typing import Iterable, Optional, Set
 
 from evdev import InputDevice, categorize, ecodes, list_devices
@@ -20,7 +22,8 @@ class BufferState:
     text: str = ""
     shift_keys: Set[str] = field(default_factory=set)
     kana_mode: bool = False
-
+    last_input_time: float | None = None
+    
     @property
     def shift_active(self) -> bool:
         return bool(self.shift_keys)
@@ -79,6 +82,7 @@ def _handle_key_down(
     keymap: KeyMapper,
     line_end: str,
     send_on_enter: bool,
+    send_mode: str,
 ) -> Optional[str]:
     if keycode in SHIFT_KEYCODES:
         state.shift_keys.add(keycode)
@@ -86,20 +90,29 @@ def _handle_key_down(
     if keycode in KANA_TOGGLE_KEYCODES:
         state.kana_mode = not state.kana_mode
         return None
-    if keycode == "KEY_ENTER":
+    if keycode == "KEY_ENTER" and send_mode == "on_enter":
         # バーコードリーダーはEnterで終端することが多いため、ここでまとめて送信する。
         payload = state.text + line_end
         if state.text or send_on_enter:
             state.text = ""
+            state.last_input_time = None
             return payload
         state.text = ""
+        state.last_input_time = None
         return None
     if keycode == "KEY_BACKSPACE":
-        state.text = state.text[:-1]
+        if send_mode != "per_char":
+            state.text = state.text[:-1]
+            if send_mode == "idle_timeout":
+                state.last_input_time = time.monotonic()
         return None
     mapped = keymap.map_keycode(keycode, state.shift_active, kana=state.kana_mode)
     if mapped:
+        if send_mode == "per_char":
+            return mapped
         state.text += mapped
+        if send_mode == "idle_timeout":
+            state.last_input_time = time.monotonic()
     else:
         logger.debug("未対応キー: %s", keycode)
     return None
@@ -110,13 +123,54 @@ def _handle_key_up(keycode: str, state: BufferState) -> None:
         state.shift_keys.discard(keycode)
 
 
-def run_event_loop(config: AppConfig, *, keymap: KeyMapper = DEFAULT_KEYMAP) -> None:
-    if config.input.mode != "evdev":
-        raise ValueError("input.mode は evdev のみサポートしています。")
+def _maybe_flush_idle_timeout(
+    state: BufferState,
+    *,
+    line_end: str,
+    idle_timeout_seconds: float,
+    now: float,
+) -> Optional[str]:
+    if not state.text or state.last_input_time is None:
+        return None
+    if now - state.last_input_time < idle_timeout_seconds:
+        return None
+    payload = state.text + line_end
+    state.text = ""
+    state.last_input_time = None
+    return payload
+def _process_key_event(
+    event,
+    *,
+    state: BufferState,
+    keymap: KeyMapper,
+    line_end: str,
+    send_on_enter: bool,
+    send_mode: str,
+    port: serial.Serial,
+    encoding: str,
+) -> None:
+    if event.type != ecodes.EV_KEY:
+        return
+    key_event = categorize(event)
+    keycodes = key_event.keycode if isinstance(key_event.keycode, list) else [key_event.keycode]
+    if key_event.keystate == key_event.key_down:
+        for keycode in keycodes:
+            payload = _handle_key_down(
+                keycode,
+                state,
+                keymap,
+                line_end,
+                send_on_enter,
+                send_mode,
+            )
+            if payload is not None:
+                _send_payload(port, payload, encoding)
+    elif key_event.keystate == key_event.key_up:
+        for keycode in keycodes:
+            _handle_key_up(keycode, state)
 
-    device = open_input_device(config.input)
-    if config.input.grab:
-        device.grab()
+
+def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keymap: KeyMapper) -> None:
 
     state = BufferState()
     with serial.Serial(
@@ -126,22 +180,79 @@ def run_event_loop(config: AppConfig, *, keymap: KeyMapper = DEFAULT_KEYMAP) -> 
     ) as port:
         logger.info("入力デバイス: %s", device.path)
         logger.info("シリアル送信先: %s", config.serial.port)
-        for event in device.read_loop():
-            if event.type != ecodes.EV_KEY:
-                continue
-            key_event = categorize(event)
-            keycodes = key_event.keycode if isinstance(key_event.keycode, list) else [key_event.keycode]
-            if key_event.keystate == key_event.key_down:
-                for keycode in keycodes:
-                    payload = _handle_key_down(
-                        keycode,
+        while True:
+            if state.text and state.last_input_time is not None:
+                now = time.monotonic()
+                remaining = config.output.idle_timeout_seconds - (now - state.last_input_time)
+                if remaining <= 0:
+                    payload = _maybe_flush_idle_timeout(
                         state,
-                        keymap,
-                        config.output.line_end,
-                        config.output.send_on_enter,
+                        line_end=config.output.line_end,
+                        idle_timeout_seconds=config.output.idle_timeout_seconds,
+                        now=now,
                     )
                     if payload is not None:
                         _send_payload(port, payload, config.output.encoding)
-            elif key_event.keystate == key_event.key_up:
-                for keycode in keycodes:
-                    _handle_key_up(keycode, state)
+                    continue
+                timeout = remaining
+            else:
+                timeout = None
+            # 入力待ちとタイムアウトを両立させるため、selectで監視する。
+            readable, _, _ = select.select([device], [], [], timeout)
+            if not readable:
+                payload = _maybe_flush_idle_timeout(
+                    state,
+                    line_end=config.output.line_end,
+                    idle_timeout_seconds=config.output.idle_timeout_seconds,
+                    now=time.monotonic(),
+                )
+                if payload is not None:
+                    _send_payload(port, payload, config.output.encoding)
+                continue
+            for event in device.read():
+                _process_key_event(
+                    event,
+                    state=state,
+                    keymap=keymap,
+                    line_end=config.output.line_end,
+                    send_on_enter=config.output.send_on_enter,
+                    send_mode=config.output.send_mode,
+                    port=port,
+                    encoding=config.output.encoding,
+                )
+
+
+def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: KeyMapper) -> None:
+    state = BufferState()
+    with serial.Serial(
+        port=config.serial.port,
+        baudrate=config.serial.baudrate,
+        timeout=config.serial.timeout,
+    ) as port:
+        logger.info("入力デバイス: %s", device.path)
+        logger.info("シリアル送信先: %s", config.serial.port)
+        for event in device.read_loop():
+            _process_key_event(
+                event,
+                state=state,
+                keymap=keymap,
+                line_end=config.output.line_end,
+                send_on_enter=config.output.send_on_enter,
+                send_mode=config.output.send_mode,
+                port=port,
+                encoding=config.output.encoding,
+            )
+
+
+def run_event_loop(config: AppConfig, *, keymap: KeyMapper = DEFAULT_KEYMAP) -> None:
+    if config.input.mode != "evdev":
+        raise ValueError("input.mode は evdev のみサポートしています。")
+
+    device = open_input_device(config.input)
+    if config.input.grab:
+        device.grab()
+
+    if config.output.send_mode == "idle_timeout":
+        _run_event_loop_idle_timeout(config, device, keymap=keymap)
+    else:
+        _run_event_loop_default(config, device, keymap=keymap)
