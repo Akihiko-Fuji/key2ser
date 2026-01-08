@@ -27,6 +27,8 @@ class OutputConfig:
     encoding: str
     line_end: str
     send_on_enter: bool
+    send_mode: str
+    idle_timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -78,7 +80,13 @@ def load_config(path: Path) -> AppConfig:
     encoding = parser.get("output", "encoding", fallback="utf-8").strip()
     line_end = parser.get("output", "line_end", fallback="\r\n")
     send_on_enter = _get_bool(parser, "output", "send_on_enter", True)
-
+    send_mode = parser.get("output", "send_mode", fallback="on_enter").strip().lower() or "on_enter"
+    if send_mode not in {"on_enter", "per_char", "idle_timeout"}:
+        raise ValueError("output.send_mode は on_enter / per_char / idle_timeout のいずれかを指定してください。")
+    idle_timeout_seconds = parser.getfloat("output", "idle_timeout_seconds", fallback=0.5)
+    if idle_timeout_seconds < 0:
+        raise ValueError("output.idle_timeout_seconds は 0 以上の値を指定してください。")
+    
     return AppConfig(
         input=InputConfig(
             mode=mode,
@@ -88,5 +96,11 @@ def load_config(path: Path) -> AppConfig:
             grab=grab,
         ),
         serial=SerialConfig(port=port, baudrate=baudrate, timeout=timeout),
-        output=OutputConfig(encoding=encoding, line_end=line_end, send_on_enter=send_on_enter),
+        output=OutputConfig(
+            encoding=encoding,
+            line_end=line_end,
+            send_on_enter=send_on_enter,
+            send_mode=send_mode,
+            idle_timeout_seconds=idle_timeout_seconds,
+        ),
     )
