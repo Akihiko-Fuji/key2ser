@@ -76,6 +76,28 @@ def _send_payload(port: serial.Serial, payload: str, encoding: str) -> None:
     port.flush()
 
 
+def _reset_buffer(state: BufferState) -> None:
+    state.text = ""
+    state.last_input_time = None
+
+
+def _iter_keycodes(key_event) -> Iterable[str]:
+    return key_event.keycode if isinstance(key_event.keycode, list) else [key_event.keycode]
+
+
+def _open_serial_port(config: AppConfig) -> serial.Serial:
+    return serial.Serial(
+        port=config.serial.port,
+        baudrate=config.serial.baudrate,
+        timeout=config.serial.timeout,
+    )
+
+
+def _log_device_info(device: InputDevice, config: AppConfig) -> None:
+    logger.info("入力デバイス: %s", device.path)
+    logger.info("シリアル送信先: %s", config.serial.port)
+
+
 def _handle_key_down(
     keycode: str,
     state: BufferState,
@@ -92,13 +114,10 @@ def _handle_key_down(
         return None
     if keycode == "KEY_ENTER" and send_mode == "on_enter":
         # バーコードリーダーはEnterで終端することが多いため、ここでまとめて送信する。
-        payload = state.text + line_end
-        if state.text or send_on_enter:
-            state.text = ""
-            state.last_input_time = None
+        payload = state.text + line_end if state.text or send_on_enter else None
+        _reset_buffer(state)
+        if payload is not None:
             return payload
-        state.text = ""
-        state.last_input_time = None
         return None
     if keycode == "KEY_BACKSPACE":
         if send_mode != "per_char":
@@ -154,7 +173,7 @@ def _process_key_event(
     key_event = categorize(event)
     keycodes = key_event.keycode if isinstance(key_event.keycode, list) else [key_event.keycode]
     if key_event.keystate == key_event.key_down:
-        for keycode in keycodes:
+        for keycode in _iter_keycodes(key_event):
             payload = _handle_key_down(
                 keycode,
                 state,
@@ -166,25 +185,20 @@ def _process_key_event(
             if payload is not None:
                 _send_payload(port, payload, encoding)
     elif key_event.keystate == key_event.key_up:
-        for keycode in keycodes:
+        for keycode in _iter_keycodes(key_event):
             _handle_key_up(keycode, state)
 
 
 def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keymap: KeyMapper) -> None:
-
     state = BufferState()
-    with serial.Serial(
-        port=config.serial.port,
-        baudrate=config.serial.baudrate,
-        timeout=config.serial.timeout,
-    ) as port:
-        logger.info("入力デバイス: %s", device.path)
-        logger.info("シリアル送信先: %s", config.serial.port)
+    with _open_serial_port(config) as port:
+        _log_device_info(device, config)
         while True:
             if state.text and state.last_input_time is not None:
                 now = time.monotonic()
                 remaining = config.output.idle_timeout_seconds - (now - state.last_input_time)
                 if remaining <= 0:
+                    # タイムアウトを超えたら入力待ちより先に送信して遅延を抑える。
                     payload = _maybe_flush_idle_timeout(
                         state,
                         line_end=config.output.line_end,
@@ -223,14 +237,8 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
 
 
 def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: KeyMapper) -> None:
-    state = BufferState()
-    with serial.Serial(
-        port=config.serial.port,
-        baudrate=config.serial.baudrate,
-        timeout=config.serial.timeout,
-    ) as port:
-        logger.info("入力デバイス: %s", device.path)
-        logger.info("シリアル送信先: %s", config.serial.port)
+    with _open_serial_port(config) as port:
+        _log_device_info(device, config)
         for event in device.read_loop():
             _process_key_event(
                 event,
