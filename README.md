@@ -6,6 +6,13 @@ Keyboard to Virtual Serial port for Raspberry Pi OS
 
 Raspberry Pi OS で HID デバイス（バーコードリーダーなど）を特定の VID/PID に限定し、取得したキー入力を仮想シリアルポートへ送信します。
 
+## 動作環境
+
+- Linux (evdev に対応している環境)
+  - 動作確認: Raspberry Pi OS
+  - そのほかの Debian/Ubuntu などの Linux でも、`/dev/input/event*` を利用できる環境であれば動作します。
+- Windows/macOS は非対応です。
+
 ## なにが悲しくてこのようなものをつくらないといけなかったのか
 Bluetoothのシリアル通信 (SPP) デバイスを使用する際、現行のBlueZはSPPプロトコルを標準でサポートしていません。そのため、設定を変更してもSPPデバイスが適切に動作しない場合があります。
 加えて、多くのBluetoothでシリアル通信をおこなうハードウェアはLinux上のSPP接続サポートせず、HIDデバイスとしての接続のみサポートしている状況です。
