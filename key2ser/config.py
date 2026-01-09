@@ -73,7 +73,10 @@ def load_config(path: Path) -> AppConfig:
     parser = configparser.ConfigParser()
     if not path.exists():
         raise FileNotFoundError(f"config file not found: {path}")
-    parser.read(path)
+    try:
+        parser.read(path)
+    except configparser.Error as exc:
+        raise ValueError("config.ini の形式が不正です。") from exc
 
     mode = parser.get("input", "mode", fallback="evdev").strip()
     device = parser.get("input", "device", fallback="").strip() or None
@@ -100,7 +103,7 @@ def load_config(path: Path) -> AppConfig:
     idle_timeout_seconds = parser.getfloat("output", "idle_timeout_seconds", fallback=0.5)
     if idle_timeout_seconds < 0:
         raise ValueError("output.idle_timeout_seconds は 0 以上の値を指定してください。")
-    
+
     return AppConfig(
         input=InputConfig(
             mode=mode,
