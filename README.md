@@ -47,12 +47,48 @@ pip install -r requirements.txt
 ```
 
 ### 仮想シリアルポートの作成例
+事前に `sudo apt install socat`してください。
 
 ```bash
-socat -d -d pty,raw,echo=0,link=/dev/ttyV0 pty,raw,echo=0,link=/dev/ttyV1
+sudo socat -d -d pty,raw,echo=0,link=/dev/ttyV0,mode=660,group=dialout \
+  pty,raw,echo=0,link=/dev/ttyV1,mode=660,group=dialout
 ```
 
 送信側が `/dev/ttyV0`、受信側が `/dev/ttyV1` になります。
+
+#### これまでの流れ（仮想TTY作成〜実行）
+
+1. 仮想シリアルポートを作成します。
+   ```bash
+   sudo socat -d -d pty,raw,echo=0,link=/dev/ttyV0,mode=660,group=dialout \
+     pty,raw,echo=0,link=/dev/ttyV1,mode=660,group=dialout
+   ```
+2. 必要に応じて実行ユーザーを `dialout` グループへ追加します。
+   ```bash
+   sudo usermod -aG dialout pi
+   ```
+   反映には再ログインが必要です。
+3. `config.ini` の `serial.port` を `/dev/ttyV0` に設定し、起動します。
+   ```bash
+   python3 key2ser.py --config config.ini
+   ```
+
+#### ttyV0 への送信確認コマンド
+
+以下のコマンドで `ttyV0` に送った内容が `ttyV1` に届くか確認できます。
+
+```bash
+cat /dev/ttyV1
+```
+
+別ターミナルで次を実行します。
+
+```bash
+echo -n "TEST" > /dev/ttyV0
+```
+
+`cat /dev/ttyV1` 側に `TEST` が表示されれば、仮想TTYのリダイレクトが正しく動作しています。
+
 
 ## 設定ファイル
 
