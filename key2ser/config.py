@@ -42,7 +42,9 @@ class AppConfig:
 DEFAULT_CONFIG_PATH = Path("config.ini")
 
 
+# 任意指定の数値項目をintに変換する。
 def _parse_optional_int(value: Optional[str], *, field_name: str) -> Optional[int]:
+    """空文字やNoneを許容しつつ数値をパースする。"""
     if value is None:
         return None
     value = value.strip()
@@ -54,13 +56,17 @@ def _parse_optional_int(value: Optional[str], *, field_name: str) -> Optional[in
         raise ValueError(f"{field_name} must be integer (decimal or hex)") from exc
 
 
+# 真偽値の設定をデフォルト込みで取得する。
 def _get_bool(parser: configparser.ConfigParser, section: str, option: str, default: bool) -> bool:
+    """存在しない設定項目に対して既定値を返す。"""
     if not parser.has_option(section, option):
         return default
     return parser.getboolean(section, option)
 
 
+# 改行コードのエスケープ解釈を行う。
 def _parse_line_end(line_end: str, *, line_end_mode: str) -> str:
+    """改行モードに応じてエスケープ変換を適用する。"""
     if line_end_mode == "literal":
         return line_end
     try:
@@ -69,7 +75,9 @@ def _parse_line_end(line_end: str, *, line_end_mode: str) -> str:
         raise ValueError("output.line_end に無効なエスケープシーケンスがあります。") from exc
 
 
+# 設定ファイルを読み込んでアプリ設定に変換する。
 def load_config(path: Path) -> AppConfig:
+    """config.ini を検証しながら AppConfig に変換する。"""
     parser = configparser.ConfigParser()
     if not path.exists():
         raise FileNotFoundError(f"config file not found: {path}")
@@ -78,12 +86,14 @@ def load_config(path: Path) -> AppConfig:
     except (configparser.Error, OSError, UnicodeDecodeError) as exc:
         raise ValueError("config.ini の読み取りに失敗しました。") from exc
 
+    # 必須セクションが揃っているかを最初に確認する。
     required_sections = {"input", "serial", "output"}
     missing_sections = sorted(required_sections - set(parser.sections()))
     if missing_sections:
         missing_labels = ", ".join(missing_sections)
         raise ValueError(f"config.ini に必要なセクションがありません: {missing_labels}")
 
+    # 入力デバイスの指定は名前優先だがVID/PIDにも対応する。
     mode = parser.get("input", "mode", fallback="evdev").strip()
     device = parser.get("input", "device", fallback="").strip() or None
     vendor_id = _parse_optional_int(parser.get("input", "vendor_id", fallback=None), field_name="vendor_id")
@@ -96,6 +106,7 @@ def load_config(path: Path) -> AppConfig:
     baudrate = parser.getint("serial", "baudrate", fallback=9600)
     timeout = parser.getfloat("serial", "timeout", fallback=1.0)
 
+    # 送信方式に応じて改行や送信トリガーを決める。
     encoding = parser.get("output", "encoding", fallback="utf-8").strip()
     line_end_mode = parser.get("output", "line_end_mode", fallback="literal").strip().lower() or "literal"
     if line_end_mode not in {"literal", "escape"}:
