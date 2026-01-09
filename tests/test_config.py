@@ -84,3 +84,19 @@ def test_load_config_handles_parse_error(monkeypatch, tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="config.ini の形式が不正です。"):
         load_config(config_file)
+
+
+def test_load_config_requires_sections(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="config.ini に必要なセクションがありません"):
+        load_config(config_file)
