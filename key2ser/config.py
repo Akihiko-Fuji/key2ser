@@ -13,7 +13,8 @@ class InputConfig:
     vendor_id: Optional[int]
     product_id: Optional[int]
     grab: bool
-
+    reconnect_interval_seconds: float
+    
 
 @dataclass(frozen=True)
 class SerialConfig:
@@ -100,6 +101,9 @@ def load_config(path: Path) -> AppConfig:
     vendor_id = _parse_optional_int(parser.get("input", "vendor_id", fallback=None), field_name="vendor_id")
     product_id = _parse_optional_int(parser.get("input", "product_id", fallback=None), field_name="product_id")
     grab = _get_bool(parser, "input", "grab", False)
+    reconnect_interval_seconds = parser.getfloat("input", "reconnect_interval_seconds", fallback=3.0)
+    if reconnect_interval_seconds < 0:
+        raise ValueError("input.reconnect_interval_seconds は 0 以上の値を指定してください。")
 
     port = parser.get("serial", "port", fallback="").strip()
     if not port:
@@ -132,6 +136,7 @@ def load_config(path: Path) -> AppConfig:
             vendor_id=vendor_id,
             product_id=product_id,
             grab=grab,
+            reconnect_interval_seconds=reconnect_interval_seconds,
         ),
         serial=SerialConfig(port=port, baudrate=baudrate, timeout=timeout),
         output=OutputConfig(
