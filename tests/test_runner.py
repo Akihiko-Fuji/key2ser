@@ -119,6 +119,7 @@ def test_open_input_device_handles_permission_error(monkeypatch, tmp_path) -> No
         vendor_id=None,
         product_id=None,
         grab=False,
+        reconnect_interval_seconds=0,
     )
 
     with pytest.raises(runner.DeviceAccessError, match="入力デバイスへのアクセス権限がありません。"):
@@ -137,6 +138,7 @@ def test_open_input_device_handles_list_error(monkeypatch) -> None:
         vendor_id=0x1234,
         product_id=0x5678,
         grab=False,
+        reconnect_interval_seconds=0,
     )
 
     with pytest.raises(runner.DeviceAccessError, match="入力デバイス一覧の取得に失敗しました。"):
@@ -156,6 +158,7 @@ def test_open_input_device_handles_device_open_error(monkeypatch) -> None:
         vendor_id=0x1234,
         product_id=0x5678,
         grab=False,
+        reconnect_interval_seconds=0,
     )
 
     with pytest.raises(runner.DeviceAccessError, match="入力デバイスのオープンに失敗しました。"):
@@ -175,6 +178,7 @@ def test_open_serial_port_handles_serial_exception(monkeypatch) -> None:
             vendor_id=None,
             product_id=None,
             grab=False,
+        reconnect_interval_seconds=0,
         ),
         serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
         output=OutputConfig(
@@ -208,6 +212,7 @@ def test_open_serial_port_handles_missing_device(monkeypatch) -> None:
             vendor_id=None,
             product_id=None,
             grab=False,
+            reconnect_interval_seconds=0,
         ),
         serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
         output=OutputConfig(
@@ -380,6 +385,7 @@ def test_run_event_loop_default_handles_read_loop_error(monkeypatch) -> None:
             vendor_id=None,
             product_id=None,
             grab=False,
+            reconnect_interval_seconds=0,
         ),
         serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
         output=OutputConfig(
@@ -423,6 +429,7 @@ def test_run_event_loop_default_handles_read_error(monkeypatch) -> None:
             vendor_id=None,
             product_id=None,
             grab=False,
+            reconnect_interval_seconds=0,
         ),
         serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
         output=OutputConfig(
@@ -491,6 +498,7 @@ def test_run_event_loop_default_sends_on_enter(monkeypatch) -> None:
             vendor_id=None,
             product_id=None,
             grab=False,
+            reconnect_interval_seconds=0,
         ),
         serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
         output=OutputConfig(
@@ -507,3 +515,86 @@ def test_run_event_loop_default_sends_on_enter(monkeypatch) -> None:
     runner._run_event_loop_default(config, DummyDevice(), keymap=runner.DEFAULT_KEYMAP)
 
     assert dummy_port.writes == [b"a\r\n"]
+
+
+def test_run_event_loop_retries_on_serial_error(monkeypatch) -> None:
+    class DummyDevice:
+        path = "/dev/input/event0"
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    dummy_device = DummyDevice()
+    sleeps: list[float] = []
+    calls = {"count": 0}
+
+    def fake_run_event_loop_default(_config, _device, *, keymap):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise runner.SerialConnectionError("serial down")
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(runner, "open_input_device", lambda _config: dummy_device)
+    monkeypatch.setattr(runner, "_run_event_loop_default", fake_run_event_loop_default)
+    monkeypatch.setattr(runner.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    config = AppConfig(
+        input=InputConfig(
+            mode="evdev",
+            device="/dev/input/event0",
+            vendor_id=None,
+            product_id=None,
+            grab=False,
+            reconnect_interval_seconds=1.5,
+        ),
+        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        output=OutputConfig(
+            encoding="utf-8",
+            line_end="\r\n",
+            line_end_mode="literal",
+            send_on_enter=True,
+            send_mode="on_enter",
+            idle_timeout_seconds=0.5,
+            dedup_window_seconds=0.2,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="stop"):
+        runner.run_event_loop(config)
+
+    assert sleeps == [1.5]
+    assert dummy_device.closed is True
+
+
+def test_run_event_loop_raises_when_reconnect_disabled(monkeypatch) -> None:
+    def raise_not_found(_config):
+        raise runner.DeviceNotFoundError("not found")
+
+    monkeypatch.setattr(runner, "open_input_device", raise_not_found)
+
+    config = AppConfig(
+        input=InputConfig(
+            mode="evdev",
+            device="/dev/input/event0",
+            vendor_id=None,
+            product_id=None,
+            grab=False,
+            reconnect_interval_seconds=0,
+        ),
+        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        output=OutputConfig(
+            encoding="utf-8",
+            line_end="\r\n",
+            line_end_mode="literal",
+            send_on_enter=True,
+            send_mode="on_enter",
+            idle_timeout_seconds=0.5,
+            dedup_window_seconds=0.2,
+        ),
+    )
+
+    with pytest.raises(runner.DeviceNotFoundError, match="not found"):
+        runner.run_event_loop(config)
