@@ -114,6 +114,7 @@ line_end=\r\n
 send_on_enter=true
 send_mode=on_enter
 idle_timeout_seconds=0.5
+dedup_window_seconds=0.2
 ```
 
 - `vendor_id` と `product_id` を両方指定すると該当デバイスのみを使用します。
@@ -127,6 +128,7 @@ idle_timeout_seconds=0.5
   - `escape`: `\r` や `\n` といったエスケープシーケンスを実際の改行として解釈します。
 - `send_on_enter` は `send_mode=on_enter` のときのみ有効で、Enter のみが入力された場合でも空文字を送信するかどうかを指定します。
 - `idle_timeout_seconds` は `send_mode=idle_timeout` のときに使用する待機時間（秒）です。
+- `dedup_window_seconds` は直近の送信と同じ内容が連続した場合に抑止する時間（秒）です。0 を指定すると抑止しません。
 - `mode=evdev` は、Linux の evdev（`/dev/input/event*`）経由で入力イベントを読む方式を指定しています。値は evdev を前提にしており、現時点で他の値を想定していません。
 
 ## 実行方法
