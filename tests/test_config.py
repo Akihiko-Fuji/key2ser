@@ -1,3 +1,4 @@
+import configparser
 from pathlib import Path
 
 import pytest
@@ -70,3 +71,16 @@ line_end=\\r\\n
     config = load_config(config_file)
 
     assert config.output.line_end == "\r\n"
+
+
+def test_load_config_handles_parse_error(monkeypatch, tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("[input]\nmode=evdev\n")
+
+    def raise_parse_error(_self, _path):
+        raise configparser.MissingSectionHeaderError("config.ini", 1, "broken")
+
+    monkeypatch.setattr(configparser.ConfigParser, "read", raise_parse_error)
+
+    with pytest.raises(ValueError, match="config.ini の形式が不正です。"):
+        load_config(config_file)
