@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 import types
 
+import pytest
+
 evdev_stub = types.ModuleType("evdev")
 evdev_stub.InputDevice = object
 evdev_stub.categorize = lambda event: None
@@ -12,6 +14,7 @@ sys.modules.setdefault("evdev", evdev_stub)
 
 serial_stub = types.ModuleType("serial")
 serial_stub.Serial = object
+serial_stub.SerialException = type("SerialException", (Exception,), {})
 sys.modules.setdefault("serial", serial_stub)
 
 from key2ser.config import AppConfig, InputConfig, OutputConfig, SerialConfig
@@ -98,6 +101,187 @@ def test_runner_on_enter_unchanged() -> None:
     )
 
     assert payload == "a\r\n"
+
+
+def test_open_input_device_handles_permission_error(monkeypatch, tmp_path) -> None:
+    device_path = tmp_path / "event0"
+    device_path.write_text("dummy")
+
+    def raise_permission_error(_path: str):
+        raise PermissionError("no permission")
+
+    monkeypatch.setattr(runner, "InputDevice", raise_permission_error)
+
+    config = InputConfig(
+        mode="evdev",
+        device=str(device_path),
+        vendor_id=None,
+        product_id=None,
+        grab=False,
+    )
+
+    with pytest.raises(runner.DeviceAccessError, match="入力デバイスへのアクセス権限がありません。"):
+        runner.open_input_device(config)
+
+
+def test_open_input_device_handles_list_error(monkeypatch) -> None:
+    def raise_list_error():
+        raise OSError("list error")
+
+    monkeypatch.setattr(runner, "list_devices", raise_list_error)
+
+    config = InputConfig(
+        mode="evdev",
+        device=None,
+        vendor_id=0x1234,
+        product_id=0x5678,
+        grab=False,
+    )
+
+    with pytest.raises(runner.DeviceAccessError, match="入力デバイス一覧の取得に失敗しました。"):
+        runner.open_input_device(config)
+
+
+def test_open_input_device_handles_device_open_error(monkeypatch) -> None:
+    def raise_device_error(_path: str):
+        raise OSError("device error")
+
+    monkeypatch.setattr(runner, "InputDevice", raise_device_error)
+    monkeypatch.setattr(runner, "list_devices", lambda: ["/dev/input/event0"])
+
+    config = InputConfig(
+        mode="evdev",
+        device=None,
+        vendor_id=0x1234,
+        product_id=0x5678,
+        grab=False,
+    )
+
+    with pytest.raises(runner.DeviceAccessError, match="入力デバイスのオープンに失敗しました。"):
+        runner.open_input_device(config)
+
+
+def test_open_serial_port_handles_serial_exception(monkeypatch) -> None:
+    def raise_serial_error(**_kwargs):
+        raise serial_stub.SerialException("serial error")
+
+    monkeypatch.setattr(runner.serial, "Serial", raise_serial_error)
+
+    config = AppConfig(
+        input=InputConfig(
+            mode="evdev",
+            device="/dev/input/event0",
+            vendor_id=None,
+            product_id=None,
+            grab=False,
+        ),
+        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        output=OutputConfig(
+            encoding="utf-8",
+            line_end="\r\n",
+            line_end_mode="literal",
+            send_on_enter=True,
+            send_mode="on_enter",
+            idle_timeout_seconds=0.5,
+        ),
+    )
+
+    with pytest.raises(runner.SerialConnectionError, match="シリアルポートを開けませんでした。"):
+        runner._open_serial_port(config)
+
+
+def test_send_payload_handles_serial_error() -> None:
+    class DummyPort:
+        def write(self, _data: bytes) -> None:
+            raise OSError("write failed")
+
+        def flush(self) -> None:
+            return None
+
+    with pytest.raises(runner.SerialConnectionError, match="シリアルへの送信に失敗しました。"):
+        runner._send_payload(DummyPort(), "a", "utf-8")
+
+
+def test_run_event_loop_default_handles_read_loop_error(monkeypatch) -> None:
+    class DummyPort:
+        def __enter__(self) -> "DummyPort":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class DummyDevice:
+        path = "/dev/input/event0"
+
+        def read_loop(self):
+            raise OSError("read error")
+
+    monkeypatch.setattr(runner, "_open_serial_port", lambda config: DummyPort())
+    monkeypatch.setattr(runner, "_log_device_info", lambda device, config: None)
+
+    config = AppConfig(
+        input=InputConfig(
+            mode="evdev",
+            device="/dev/input/event0",
+            vendor_id=None,
+            product_id=None,
+            grab=False,
+        ),
+        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        output=OutputConfig(
+            encoding="utf-8",
+            line_end="\r\n",
+            line_end_mode="literal",
+            send_on_enter=True,
+            send_mode="on_enter",
+            idle_timeout_seconds=0.5,
+        ),
+    )
+
+    with pytest.raises(runner.DeviceAccessError, match="入力デバイスの監視を開始できませんでした。"):
+        runner._run_event_loop_default(config, DummyDevice(), keymap=runner.DEFAULT_KEYMAP)
+
+
+def test_run_event_loop_default_handles_read_error(monkeypatch) -> None:
+    class DummyPort:
+        def __enter__(self) -> "DummyPort":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class DummyDevice:
+        path = "/dev/input/event0"
+
+        def read_loop(self):
+            yield "event"
+            raise OSError("read error")
+
+    monkeypatch.setattr(runner, "_open_serial_port", lambda config: DummyPort())
+    monkeypatch.setattr(runner, "_log_device_info", lambda device, config: None)
+    monkeypatch.setattr(runner, "_process_key_event", lambda *args, **kwargs: None)
+
+    config = AppConfig(
+        input=InputConfig(
+            mode="evdev",
+            device="/dev/input/event0",
+            vendor_id=None,
+            product_id=None,
+            grab=False,
+        ),
+        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        output=OutputConfig(
+            encoding="utf-8",
+            line_end="\r\n",
+            line_end_mode="literal",
+            send_on_enter=True,
+            send_mode="on_enter",
+            idle_timeout_seconds=0.5,
+        ),
+    )
+
+    with pytest.raises(runner.DeviceAccessError, match="入力デバイスの読み取りに失敗しました。"):
+        runner._run_event_loop_default(config, DummyDevice(), keymap=runner.DEFAULT_KEYMAP)
 
 
 def test_run_event_loop_default_sends_on_enter(monkeypatch) -> None:
