@@ -31,7 +31,7 @@ pip install -r requirements.txt
 ## GitHub からのインストール
 
 ```bash
-git clone https://github.com/<OWNER>/key2ser.git
+git clone https://github.com/Akihiko-Fuji/key2ser.git
 cd key2ser
 python3 -m venv .venv
 source .venv/bin/activate
