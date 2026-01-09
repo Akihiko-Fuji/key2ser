@@ -78,6 +78,12 @@ def load_config(path: Path) -> AppConfig:
     except configparser.Error as exc:
         raise ValueError("config.ini の形式が不正です。") from exc
 
+    required_sections = {"input", "serial", "output"}
+    missing_sections = sorted(required_sections - set(parser.sections()))
+    if missing_sections:
+        missing_labels = ", ".join(missing_sections)
+        raise ValueError(f"config.ini に必要なセクションがありません: {missing_labels}")
+
     mode = parser.get("input", "mode", fallback="evdev").strip()
     device = parser.get("input", "device", fallback="").strip() or None
     vendor_id = _parse_optional_int(parser.get("input", "vendor_id", fallback=None), field_name="vendor_id")
