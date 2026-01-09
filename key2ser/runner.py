@@ -23,7 +23,7 @@ class BufferState:
     shift_keys: Set[str] = field(default_factory=set)
     kana_mode: bool = False
     last_input_time: float | None = None
-    
+
     @property
     def shift_active(self) -> bool:
         return bool(self.shift_keys)
@@ -36,14 +36,30 @@ class DeviceNotFoundError(RuntimeError):
 def _match_device_info(device: InputDevice, *, vendor_id: int, product_id: int) -> bool:
     return device.info.vendor == vendor_id and device.info.product == product_id
 
+class DeviceAccessError(RuntimeError):
+    pass
+
+
+class SerialConnectionError(RuntimeError):
+    pass
+
 
 def _select_device_by_vid_pid(devices: Iterable[str], vendor_id: int, product_id: int) -> InputDevice:
     matches = []
+    access_error = False
     for path in devices:
-        device = InputDevice(path)
+        try:
+            device = InputDevice(path)
+        except OSError as exc:
+            access_error = True
+            logger.warning("入力デバイスのオープンに失敗しました: %s", path)
+            logger.debug("入力デバイスの詳細エラー: %s", exc)
+            continue
         if _match_device_info(device, vendor_id=vendor_id, product_id=product_id):
             matches.append(device)
     if not matches:
+        if access_error:
+            raise DeviceAccessError("入力デバイスのオープンに失敗しました。")
         raise DeviceNotFoundError("指定されたVID/PIDに一致する入力デバイスが見つかりません。")
     if len(matches) > 1:
         raise DeviceNotFoundError("VID/PIDが一致するデバイスが複数あります。deviceを指定してください。")
@@ -55,10 +71,20 @@ def open_input_device(config: InputConfig) -> InputDevice:
         path = Path(config.device)
         if not path.exists():
             raise DeviceNotFoundError(f"input.device が存在しません: {path}")
-        return InputDevice(str(path))
+        try:
+            return InputDevice(str(path))
+        except PermissionError as exc:
+            raise DeviceAccessError("入力デバイスへのアクセス権限がありません。") from exc
+        except OSError as exc:
+            raise DeviceAccessError("入力デバイスのオープンに失敗しました。") from exc
 
     if config.vendor_id is not None and config.product_id is not None:
-        return _select_device_by_vid_pid(list_devices(), config.vendor_id, config.product_id)
+        try:
+            devices = list_devices()
+        except OSError as exc:
+            raise DeviceAccessError("入力デバイス一覧の取得に失敗しました。") from exc
+        return _select_device_by_vid_pid(devices, config.vendor_id, config.product_id)
+
 
     raise DeviceNotFoundError("input.device または vendor_id/product_id を指定してください。")
 
@@ -72,8 +98,11 @@ def _encode_payload(payload: str, encoding: str) -> bytes:
 
 def _send_payload(port: serial.Serial, payload: str, encoding: str) -> None:
     data = _encode_payload(payload, encoding)
-    port.write(data)
-    port.flush()
+    try:
+        port.write(data)
+        port.flush()
+    except (serial.SerialException, OSError) as exc:
+        raise SerialConnectionError("シリアルへの送信に失敗しました。") from exc
 
 
 def _reset_buffer(state: BufferState) -> None:
@@ -86,11 +115,14 @@ def _iter_keycodes(key_event) -> Iterable[str]:
 
 
 def _open_serial_port(config: AppConfig) -> serial.Serial:
-    return serial.Serial(
-        port=config.serial.port,
-        baudrate=config.serial.baudrate,
-        timeout=config.serial.timeout,
-    )
+    try:
+        return serial.Serial(
+            port=config.serial.port,
+            baudrate=config.serial.baudrate,
+            timeout=config.serial.timeout,
+        )
+    except (serial.SerialException, OSError) as exc:
+        raise SerialConnectionError("シリアルポートを開けませんでした。") from exc
 
 
 def _log_device_info(device: InputDevice, config: AppConfig) -> None:
@@ -214,7 +246,10 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
             else:
                 timeout = None
             # 入力待ちとタイムアウトを両立させるため、selectで監視する。
-            readable, _, _ = select.select([device], [], [], timeout)
+            try:
+                readable, _, _ = select.select([device], [], [], timeout)
+            except OSError as exc:
+                raise DeviceAccessError("入力デバイスの待機中にエラーが発生しました。") from exc
             if not readable:
                 payload = _maybe_flush_idle_timeout(
                     state,
@@ -225,7 +260,11 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                 if payload is not None:
                     _send_payload(port, payload, config.output.encoding)
                 continue
-            for event in device.read():
+            try:
+                events = list(device.read())
+            except OSError as exc:
+                raise DeviceAccessError("入力デバイスの読み取りに失敗しました。") from exc
+            for event in events:
                 _process_key_event(
                     event,
                     state=state,
@@ -236,23 +275,29 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                     port=port,
                     encoding=config.output.encoding,
                 )
-
+        try:
+            event_iterator = device.read_loop()
+        except OSError as exc:
+            raise DeviceAccessError("入力デバイスの監視を開始できませんでした。") from exc
+        try:
+            for event in event_iterator:
+                _process_key_event(
+                    event,
+                    state=state,
+                    keymap=keymap,
+                    line_end=config.output.line_end,
+                    send_on_enter=config.output.send_on_enter,
+                    send_mode=config.output.send_mode,
+                    port=port,
+                    encoding=config.output.encoding,
+                )
+        except OSError as exc:
+            raise DeviceAccessError("入力デバイスの読み取りに失敗しました。") from exc
 
 def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: KeyMapper) -> None:
     state = BufferState()
     with _open_serial_port(config) as port:
         _log_device_info(device, config)
-        for event in device.read_loop():
-            _process_key_event(
-                event,
-                state=state,
-                keymap=keymap,
-                line_end=config.output.line_end,
-                send_on_enter=config.output.send_on_enter,
-                send_mode=config.output.send_mode,
-                port=port,
-                encoding=config.output.encoding,
-            )
 
 
 def run_event_loop(config: AppConfig, *, keymap: KeyMapper = DEFAULT_KEYMAP) -> None:
@@ -261,7 +306,10 @@ def run_event_loop(config: AppConfig, *, keymap: KeyMapper = DEFAULT_KEYMAP) -> 
 
     device = open_input_device(config.input)
     if config.input.grab:
-        device.grab()
+        try:
+            device.grab()
+        except OSError as exc:
+            raise DeviceAccessError("入力デバイスの排他取得に失敗しました。") from exc
 
     if config.output.send_mode == "idle_timeout":
         _run_event_loop_idle_timeout(config, device, keymap=keymap)
