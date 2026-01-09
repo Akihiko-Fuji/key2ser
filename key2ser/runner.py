@@ -237,7 +237,6 @@ def _process_key_event(
     if event.type != ecodes.EV_KEY:
         return
     key_event = categorize(event)
-    keycodes = key_event.keycode if isinstance(key_event.keycode, list) else [key_event.keycode]
     if key_event.keystate == key_event.key_down:
         for keycode in _iter_keycodes(key_event):
             payload = _handle_key_down(
@@ -310,24 +309,6 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                     port=port,
                     encoding=config.output.encoding,
                 )
-        try:
-            event_iterator = device.read_loop()
-        except OSError as exc:
-            raise DeviceAccessError("入力デバイスの監視を開始できませんでした。") from exc
-        try:
-            for event in event_iterator:
-                _process_key_event(
-                    event,
-                    state=state,
-                    keymap=keymap,
-                    line_end=config.output.line_end,
-                    send_on_enter=config.output.send_on_enter,
-                    send_mode=config.output.send_mode,
-                    port=port,
-                    encoding=config.output.encoding,
-                )
-        except OSError as exc:
-            raise DeviceAccessError("入力デバイスの読み取りに失敗しました。") from exc
 
 
 # 標準方式のイベントループを実行する。
