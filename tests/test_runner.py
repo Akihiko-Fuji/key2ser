@@ -202,6 +202,11 @@ def test_send_payload_handles_serial_error() -> None:
         runner._send_payload(DummyPort(), "a", "utf-8")
 
 
+def test_encode_payload_handles_invalid_encoding() -> None:
+    with pytest.raises(ValueError, match="output.encoding に未対応の文字コードが指定されています。"):
+        runner._encode_payload("a", "invalid-encoding")
+
+
 def test_run_event_loop_default_handles_read_loop_error(monkeypatch) -> None:
     class DummyPort:
         def __enter__(self) -> "DummyPort":
