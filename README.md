@@ -28,6 +28,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## GitHub からのインストール
+
+```bash
+git clone https://github.com/<OWNER>/key2ser.git
+cd key2ser
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
 ### 仮想シリアルポートの作成例
 
 ```bash
@@ -114,6 +124,19 @@ sudo systemctl enable --now key2ser.service
 
 ```bash
 sudo systemctl restart key2ser.service
+```
+
+常駐を解除（無効化）する場合は次を実行します。
+
+```bash
+sudo systemctl disable --now key2ser.service
+```
+
+サービスファイル自体も削除する場合は次を実行します。
+
+```bash
+sudo rm /etc/systemd/system/key2ser.service
+sudo systemctl daemon-reload
 ```
 
 ログ確認は次で行えます。
