@@ -30,6 +30,7 @@ class OutputConfig:
     send_on_enter: bool
     send_mode: str
     idle_timeout_seconds: float
+    dedup_window_seconds: float
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,9 @@ def load_config(path: Path) -> AppConfig:
     idle_timeout_seconds = parser.getfloat("output", "idle_timeout_seconds", fallback=0.5)
     if idle_timeout_seconds < 0:
         raise ValueError("output.idle_timeout_seconds は 0 以上の値を指定してください。")
+    dedup_window_seconds = parser.getfloat("output", "dedup_window_seconds", fallback=0.2)
+    if dedup_window_seconds < 0:
+        raise ValueError("output.dedup_window_seconds は 0 以上の値を指定してください。")
 
     return AppConfig(
         input=InputConfig(
@@ -137,5 +141,6 @@ def load_config(path: Path) -> AppConfig:
             send_on_enter=send_on_enter,
             send_mode=send_mode,
             idle_timeout_seconds=idle_timeout_seconds,
+            dedup_window_seconds=dedup_window_seconds,
         ),
     )
