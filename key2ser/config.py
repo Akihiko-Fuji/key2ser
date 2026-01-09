@@ -75,8 +75,8 @@ def load_config(path: Path) -> AppConfig:
         raise FileNotFoundError(f"config file not found: {path}")
     try:
         parser.read(path)
-    except configparser.Error as exc:
-        raise ValueError("config.ini の形式が不正です。") from exc
+    except (configparser.Error, OSError, UnicodeDecodeError) as exc:
+        raise ValueError("config.ini の読み取りに失敗しました。") from exc
 
     required_sections = {"input", "serial", "output"}
     missing_sections = sorted(required_sections - set(parser.sections()))
