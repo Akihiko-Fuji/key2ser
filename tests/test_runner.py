@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import sys
 import types
 
@@ -186,7 +187,42 @@ def test_open_serial_port_handles_serial_exception(monkeypatch) -> None:
         ),
     )
 
-    with pytest.raises(runner.SerialConnectionError, match="シリアルポートを開けませんでした。"):
+    with pytest.raises(
+        runner.SerialConnectionError,
+        match=r"シリアルポートを開けませんでした: /dev/ttyV0 \(serial error\)",
+    ):
+        runner._open_serial_port(config)
+
+
+def test_open_serial_port_handles_missing_device(monkeypatch) -> None:
+    def raise_os_error(**_kwargs):
+        raise OSError(errno.ENOENT, "No such file or directory")
+
+    monkeypatch.setattr(runner.serial, "Serial", raise_os_error)
+
+    config = AppConfig(
+        input=InputConfig(
+            mode="evdev",
+            device="/dev/input/event0",
+            vendor_id=None,
+            product_id=None,
+            grab=False,
+        ),
+        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        output=OutputConfig(
+            encoding="utf-8",
+            line_end="\r\n",
+            line_end_mode="literal",
+            send_on_enter=True,
+            send_mode="on_enter",
+            idle_timeout_seconds=0.5,
+        ),
+    )
+
+    with pytest.raises(
+        runner.SerialConnectionError,
+        match=r"シリアルポートを開けませんでした: /dev/ttyV0 \(デバイスが存在しません。\)",
+    ):
         runner._open_serial_port(config)
 
 
