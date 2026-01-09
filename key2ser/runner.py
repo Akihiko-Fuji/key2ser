@@ -205,6 +205,15 @@ def _log_device_info(device: InputDevice, config: AppConfig) -> None:
     logger.info("シリアル送信先: %s", config.serial.port)
 
 
+# 入力デバイスをクローズ
+def _close_input_device(device: InputDevice) -> None:
+    """入力デバイスをクローズし、失敗時はログに残す。"""
+    try:
+        device.close()
+    except OSError as exc:
+        logger.warning("入力デバイスのクローズに失敗しました: %s", exc)
+
+
 # キーダウン時のバッファ処理と送信判定を行う。
 def _handle_key_down(
     keycode: str,
@@ -420,15 +429,32 @@ def run_event_loop(config: AppConfig, *, keymap: KeyMapper = DEFAULT_KEYMAP) -> 
     if config.input.mode != "evdev":
         raise ValueError("input.mode は evdev のみサポートしています。")
 
-    device = open_input_device(config.input)
-    if config.input.grab:
+    while True:
+        device: InputDevice | None = None
         try:
-            device.grab()
-        except OSError as exc:
-            raise DeviceAccessError("入力デバイスの排他取得に失敗しました。") from exc
+            device = open_input_device(config.input)
+            if config.input.grab:
+                try:
+                    device.grab()
+                except OSError as exc:
+                    raise DeviceAccessError("入力デバイスの排他取得に失敗しました。") from exc
 
-    # 送信モードに応じてループを切り替える。
-    if config.output.send_mode == "idle_timeout":
-        _run_event_loop_idle_timeout(config, device, keymap=keymap)
-    else:
-        _run_event_loop_default(config, device, keymap=keymap)
+            # 送信モードに応じてループを切り替える。
+            if config.output.send_mode == "idle_timeout":
+                _run_event_loop_idle_timeout(config, device, keymap=keymap)
+            else:
+                _run_event_loop_default(config, device, keymap=keymap)
+            return
+        except (DeviceNotFoundError, DeviceAccessError, SerialConnectionError) as exc:
+            if config.input.reconnect_interval_seconds <= 0:
+                raise
+            logger.error("%s", exc)
+            # Bluetoothの再接続待ちを考慮して一定間隔で再試行する。
+            logger.info(
+                "再接続を%.1f秒後に試みます。",
+                config.input.reconnect_interval_seconds,
+            )
+            time.sleep(config.input.reconnect_interval_seconds)
+        finally:
+            if device is not None:
+                _close_input_device(device)
