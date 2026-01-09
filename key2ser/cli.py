@@ -56,6 +56,12 @@ def main(argv: list[str] | None = None) -> int:
     except runner.DeviceNotFoundError as exc:
         logging.error("%s", exc)
         return 3
+    except runner.DeviceAccessError as exc:
+        logging.error("%s", exc)
+        return 3
+    except runner.SerialConnectionError as exc:
+        logging.error("%s", exc)
+        return 5    
     except ValueError as exc:
         logging.error("%s", exc)
         return 4
