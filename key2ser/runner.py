@@ -33,7 +33,9 @@ class DeviceNotFoundError(RuntimeError):
     pass
 
 
+# 入力デバイスのVID/PID一致を判定する。
 def _match_device_info(device: InputDevice, *, vendor_id: int, product_id: int) -> bool:
+    """InputDeviceの情報が指定VID/PIDと一致するか判定する。"""
     return device.info.vendor == vendor_id and device.info.product == product_id
 
 class DeviceAccessError(RuntimeError):
@@ -44,7 +46,9 @@ class SerialConnectionError(RuntimeError):
     pass
 
 
+# VID/PIDで一致する入力デバイスを1つ選択する。
 def _select_device_by_vid_pid(devices: Iterable[str], vendor_id: int, product_id: int) -> InputDevice:
+    """候補のデバイスからVID/PID一致のものを検索して返す。"""
     matches = []
     access_error = False
     for path in devices:
@@ -58,15 +62,19 @@ def _select_device_by_vid_pid(devices: Iterable[str], vendor_id: int, product_id
         if _match_device_info(device, vendor_id=vendor_id, product_id=product_id):
             matches.append(device)
     if not matches:
+        # デバイス一覧の取得はできても個別アクセスに失敗した場合は別エラーにする。
         if access_error:
             raise DeviceAccessError("入力デバイスのオープンに失敗しました。")
         raise DeviceNotFoundError("指定されたVID/PIDに一致する入力デバイスが見つかりません。")
     if len(matches) > 1:
+        # 複数ヒットは誤送信を避けるため明示指定を促す。
         raise DeviceNotFoundError("VID/PIDが一致するデバイスが複数あります。deviceを指定してください。")
     return matches[0]
 
 
+# 設定に従って入力デバイスを開く。
 def open_input_device(config: InputConfig) -> InputDevice:
+    """デバイスパスまたはVID/PID指定でInputDeviceを取得する。"""
     if config.device:
         path = Path(config.device)
         if not path.exists():
@@ -89,7 +97,9 @@ def open_input_device(config: InputConfig) -> InputDevice:
     raise DeviceNotFoundError("input.device または vendor_id/product_id を指定してください。")
 
 
+# 送信前の文字列を指定エンコーディングでバイト化する。
 def _encode_payload(payload: str, encoding: str) -> bytes:
+    """出力文字列をエンコードし、失敗時はValueErrorに変換する。"""
     try:
         return payload.encode(encoding)
     except UnicodeEncodeError as exc:
@@ -98,7 +108,9 @@ def _encode_payload(payload: str, encoding: str) -> bytes:
     except LookupError as exc:
         raise ValueError("output.encoding に未対応の文字コードが指定されています。") from exc
 
+# シリアルへデータを送信する。
 def _send_payload(port: serial.Serial, payload: str, encoding: str) -> None:
+    """シリアルポートにペイロードを書き込み送信する。"""
     data = _encode_payload(payload, encoding)
     try:
         port.write(data)
@@ -107,16 +119,22 @@ def _send_payload(port: serial.Serial, payload: str, encoding: str) -> None:
         raise SerialConnectionError("シリアルへの送信に失敗しました。") from exc
 
 
+# 入力バッファを初期化する。
 def _reset_buffer(state: BufferState) -> None:
+    """送信後に状態を初期化するためのヘルパー。"""
     state.text = ""
     state.last_input_time = None
 
 
+# キーイベントからキーコードのリストを取得する。
 def _iter_keycodes(key_event) -> Iterable[str]:
+    """単一/複数のキーコード表現を統一して返す。"""
     return key_event.keycode if isinstance(key_event.keycode, list) else [key_event.keycode]
 
 
+# シリアルポートを開く。
 def _open_serial_port(config: AppConfig) -> serial.Serial:
+    """設定に従ってシリアルポートを開き例外を変換する。"""
     try:
         return serial.Serial(
             port=config.serial.port,
@@ -127,11 +145,14 @@ def _open_serial_port(config: AppConfig) -> serial.Serial:
         raise SerialConnectionError("シリアルポートを開けませんでした。") from exc
 
 
+# 起動時にデバイス情報をログ出力する。
 def _log_device_info(device: InputDevice, config: AppConfig) -> None:
+    """入出力デバイスの情報をログに記録する。"""
     logger.info("入力デバイス: %s", device.path)
     logger.info("シリアル送信先: %s", config.serial.port)
 
 
+# キーダウン時のバッファ処理と送信判定を行う。
 def _handle_key_down(
     keycode: str,
     state: BufferState,
@@ -140,6 +161,7 @@ def _handle_key_down(
     send_on_enter: bool,
     send_mode: str,
 ) -> Optional[str]:
+    """キーダウンイベントを解釈して送信文字列を返す。"""
     if keycode in SHIFT_KEYCODES:
         state.shift_keys.add(keycode)
         return None
@@ -155,6 +177,7 @@ def _handle_key_down(
         return None
     if keycode == "KEY_BACKSPACE":
         if send_mode != "per_char":
+            # 逐次送信でなければバッファから最後の1文字を削除する。
             state.text = state.text[:-1]
             if send_mode == "idle_timeout":
                 state.last_input_time = time.monotonic()
@@ -165,17 +188,21 @@ def _handle_key_down(
             return mapped
         state.text += mapped
         if send_mode == "idle_timeout":
+            # アイドルタイムアウト基準時刻を入力ごとに更新する。
             state.last_input_time = time.monotonic()
     else:
         logger.debug("未対応キー: %s", keycode)
     return None
 
 
+# キーアップ時にシフト状態を更新する。
 def _handle_key_up(keycode: str, state: BufferState) -> None:
+    """キーアップでシフト状態を解除する。"""
     if keycode in SHIFT_KEYCODES:
         state.shift_keys.discard(keycode)
 
 
+# アイドルタイムアウト時の送信可否を判定する。
 def _maybe_flush_idle_timeout(
     state: BufferState,
     *,
@@ -183,6 +210,7 @@ def _maybe_flush_idle_timeout(
     idle_timeout_seconds: float,
     now: float,
 ) -> Optional[str]:
+    """一定時間入力が止まった場合に送信ペイロードを返す。"""
     if not state.text or state.last_input_time is None:
         return None
     if now - state.last_input_time < idle_timeout_seconds:
@@ -193,6 +221,7 @@ def _maybe_flush_idle_timeout(
     return payload
 
 
+# キーイベントを解析して必要に応じて送信する。
 def _process_key_event(
     event,
     *,
@@ -204,6 +233,7 @@ def _process_key_event(
     port: serial.Serial,
     encoding: str,
 ) -> None:
+    """EV_KEYイベントのみを処理して送信する。"""
     if event.type != ecodes.EV_KEY:
         return
     key_event = categorize(event)
@@ -225,13 +255,16 @@ def _process_key_event(
             _handle_key_up(keycode, state)
 
 
+# アイドルタイムアウト方式のイベントループを実行する。
 def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keymap: KeyMapper) -> None:
+    """一定時間入力が止まったら送信するモードのループ。"""
     state = BufferState()
     with _open_serial_port(config) as port:
         _log_device_info(device, config)
         while True:
             if state.text and state.last_input_time is not None:
                 now = time.monotonic()
+                # 入力停止の残り時間を計算して待機時間に使う。
                 remaining = config.output.idle_timeout_seconds - (now - state.last_input_time)
                 if remaining <= 0:
                     # タイムアウトを超えたら入力待ちより先に送信して遅延を抑える。
@@ -296,7 +329,10 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
         except OSError as exc:
             raise DeviceAccessError("入力デバイスの読み取りに失敗しました。") from exc
 
+
+# 標準方式のイベントループを実行する。
 def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: KeyMapper) -> None:
+    """Enter送信/逐次送信向けのイベントループ。"""
     state = BufferState()
     with _open_serial_port(config) as port:
         _log_device_info(device, config)
@@ -319,7 +355,10 @@ def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: K
         except OSError as exc:
             raise DeviceAccessError("入力デバイスの読み取りに失敗しました。") from exc
 
+
+# 設定に応じて適切なイベントループを起動する。
 def run_event_loop(config: AppConfig, *, keymap: KeyMapper = DEFAULT_KEYMAP) -> None:
+    """入力モードに応じたイベントループを開始する。"""
     if config.input.mode != "evdev":
         raise ValueError("input.mode は evdev のみサポートしています。")
 
@@ -330,6 +369,7 @@ def run_event_loop(config: AppConfig, *, keymap: KeyMapper = DEFAULT_KEYMAP) -> 
         except OSError as exc:
             raise DeviceAccessError("入力デバイスの排他取得に失敗しました。") from exc
 
+    # 送信モードに応じてループを切り替える。
     if config.output.send_mode == "idle_timeout":
         _run_event_loop_idle_timeout(config, device, keymap=keymap)
     else:
