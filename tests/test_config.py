@@ -30,6 +30,7 @@ line_end=\r\n
     assert config.input.vendor_id == 0x1234
     assert config.input.product_id == 0xABCD
     assert config.serial.port == "/dev/ttyV0"
+    assert config.output.dedup_window_seconds == 0.2
 
 
 def test_load_config_requires_serial_port(tmp_path: Path) -> None:
@@ -71,6 +72,25 @@ line_end=\\r\\n
     config = load_config(config_file)
 
     assert config.output.line_end == "\r\n"
+
+
+def test_load_config_rejects_negative_dedup_window(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+
+[output]
+dedup_window_seconds=-1
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="output.dedup_window_seconds は 0 以上の値を指定してください。"):
+        load_config(config_file)
 
 
 def test_load_config_handles_parse_error(monkeypatch, tmp_path: Path) -> None:
