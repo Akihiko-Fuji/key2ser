@@ -24,6 +24,8 @@ class BufferState:
     shift_keys: Set[str] = field(default_factory=set)
     kana_mode: bool = False
     last_input_time: float | None = None
+    last_sent_payload: str | None = None
+    last_sent_time: float | None = None
 
     @property
     def shift_active(self) -> bool:
@@ -118,6 +120,48 @@ def _send_payload(port: serial.Serial, payload: str, encoding: str) -> None:
         port.flush()
     except (serial.SerialException, OSError) as exc:
         raise SerialConnectionError("シリアルへの送信に失敗しました。") from exc
+
+# 直近の送信と重複する場合に抑止するか判定
+def _should_suppress_duplicate(
+    state: BufferState,
+    payload: str,
+    *,
+    dedup_window_seconds: float,
+    now: float,
+) -> bool:
+    """直近の送信と重複する場合に抑止するか判定する。"""
+    if dedup_window_seconds <= 0:
+        return False
+    if state.last_sent_payload is None or state.last_sent_time is None:
+        return False
+    if payload != state.last_sent_payload:
+        return False
+    return now - state.last_sent_time <= dedup_window_seconds
+
+
+def _send_payload_with_dedup(
+    port: serial.Serial,
+    payload: str,
+    *,
+    state: BufferState,
+    send_mode: str,
+    encoding: str,
+    dedup_window_seconds: float,
+) -> None:
+    """重複送信を抑止しながらペイロードを送信する。"""
+    now = time.monotonic()
+    if send_mode != "per_char":
+        if _should_suppress_duplicate(
+            state,
+            payload,
+            dedup_window_seconds=dedup_window_seconds,
+            now=now,
+        ):
+            # バーコードリーダーの二重送信を抑止するため、短時間の同一ペイロードは無視する。
+            return
+    _send_payload(port, payload, encoding)
+    state.last_sent_payload = payload
+    state.last_sent_time = now
 
 
 # 入力バッファを初期化する。
@@ -241,6 +285,7 @@ def _process_key_event(
     send_mode: str,
     port: serial.Serial,
     encoding: str,
+    dedup_window_seconds: float,
 ) -> None:
     """EV_KEYイベントのみを処理して送信する。"""
     if event.type != ecodes.EV_KEY:
@@ -257,7 +302,14 @@ def _process_key_event(
                 send_mode,
             )
             if payload is not None:
-                _send_payload(port, payload, encoding)
+                _send_payload_with_dedup(
+                    port,
+                    payload,
+                    state=state,
+                    send_mode=send_mode,
+                    encoding=encoding,
+                    dedup_window_seconds=dedup_window_seconds,
+                )
     elif key_event.keystate == key_event.key_up:
         for keycode in _iter_keycodes(key_event):
             _handle_key_up(keycode, state)
@@ -283,7 +335,14 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                         now=now,
                     )
                     if payload is not None:
-                        _send_payload(port, payload, config.output.encoding)
+                        _send_payload_with_dedup(
+                            port,
+                            payload,
+                            state=state,
+                            send_mode=config.output.send_mode,
+                            encoding=config.output.encoding,
+                            dedup_window_seconds=config.output.dedup_window_seconds,
+                        )
                     continue
                 timeout = remaining
             else:
@@ -301,7 +360,14 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                     now=time.monotonic(),
                 )
                 if payload is not None:
-                    _send_payload(port, payload, config.output.encoding)
+                    _send_payload_with_dedup(
+                        port,
+                        payload,
+                        state=state,
+                        send_mode=config.output.send_mode,
+                        encoding=config.output.encoding,
+                        dedup_window_seconds=config.output.dedup_window_seconds,
+                    )
                 continue
             try:
                 events = list(device.read())
@@ -317,6 +383,7 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                     send_mode=config.output.send_mode,
                     port=port,
                     encoding=config.output.encoding,
+                    dedup_window_seconds=config.output.dedup_window_seconds,
                 )
 
 
@@ -341,6 +408,7 @@ def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: K
                     send_mode=config.output.send_mode,
                     port=port,
                     encoding=config.output.encoding,
+                    dedup_window_seconds=config.output.dedup_window_seconds,
                 )
         except OSError as exc:
             raise DeviceAccessError("入力デバイスの読み取りに失敗しました。") from exc
