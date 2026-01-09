@@ -184,6 +184,7 @@ def test_open_serial_port_handles_serial_exception(monkeypatch) -> None:
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
+            dedup_window_seconds=0.2,
         ),
     )
 
@@ -216,6 +217,7 @@ def test_open_serial_port_handles_missing_device(monkeypatch) -> None:
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
+            dedup_window_seconds=0.2,
         ),
     )
 
@@ -236,6 +238,117 @@ def test_send_payload_handles_serial_error() -> None:
 
     with pytest.raises(runner.SerialConnectionError, match="シリアルへの送信に失敗しました。"):
         runner._send_payload(DummyPort(), "a", "utf-8")
+
+
+def test_send_payload_with_dedup_suppresses_duplicate(monkeypatch) -> None:
+    class DummyPort:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        def write(self, data: bytes) -> None:
+            self.writes.append(data)
+
+        def flush(self) -> None:
+            return None
+
+    state = runner.BufferState()
+    port = DummyPort()
+
+    times = iter([10.0, 10.1])
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(times))
+
+    runner._send_payload_with_dedup(
+        port,
+        "payload",
+        state=state,
+        send_mode="on_enter",
+        encoding="utf-8",
+        dedup_window_seconds=0.2,
+    )
+    runner._send_payload_with_dedup(
+        port,
+        "payload",
+        state=state,
+        send_mode="on_enter",
+        encoding="utf-8",
+        dedup_window_seconds=0.2,
+    )
+
+    assert port.writes == [b"payload"]
+
+
+def test_send_payload_with_dedup_allows_after_window(monkeypatch) -> None:
+    class DummyPort:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        def write(self, data: bytes) -> None:
+            self.writes.append(data)
+
+        def flush(self) -> None:
+            return None
+
+    state = runner.BufferState()
+    port = DummyPort()
+
+    times = iter([10.0, 10.5])
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(times))
+
+    runner._send_payload_with_dedup(
+        port,
+        "payload",
+        state=state,
+        send_mode="on_enter",
+        encoding="utf-8",
+        dedup_window_seconds=0.2,
+    )
+    runner._send_payload_with_dedup(
+        port,
+        "payload",
+        state=state,
+        send_mode="on_enter",
+        encoding="utf-8",
+        dedup_window_seconds=0.2,
+    )
+
+    assert port.writes == [b"payload", b"payload"]
+
+
+def test_send_payload_with_dedup_does_not_block_per_char(monkeypatch) -> None:
+    class DummyPort:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        def write(self, data: bytes) -> None:
+            self.writes.append(data)
+
+        def flush(self) -> None:
+            return None
+
+    state = runner.BufferState()
+    port = DummyPort()
+
+    times = iter([10.0, 10.1])
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(times))
+
+    runner._send_payload_with_dedup(
+        port,
+        "a",
+        state=state,
+        send_mode="per_char",
+        encoding="utf-8",
+        dedup_window_seconds=0.2,
+    )
+    runner._send_payload_with_dedup(
+        port,
+        "a",
+        state=state,
+        send_mode="per_char",
+        encoding="utf-8",
+        dedup_window_seconds=0.2,
+    )
+
+    assert port.writes == [b"a", b"a"]
 
 
 def test_encode_payload_handles_invalid_encoding() -> None:
@@ -276,6 +389,7 @@ def test_run_event_loop_default_handles_read_loop_error(monkeypatch) -> None:
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
+            dedup_window_seconds=0.2,
         ),
     )
 
@@ -318,6 +432,7 @@ def test_run_event_loop_default_handles_read_error(monkeypatch) -> None:
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
+            dedup_window_seconds=0.2,
         ),
     )
 
@@ -385,6 +500,7 @@ def test_run_event_loop_default_sends_on_enter(monkeypatch) -> None:
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
+            dedup_window_seconds=0.2,
         ),
     )
 
