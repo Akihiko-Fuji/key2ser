@@ -6,6 +6,14 @@ Keyboard to Virtual Serial port for Raspberry Pi OS
 
 Raspberry Pi OS で HID デバイス（バーコードリーダーなど）を特定の VID/PID に限定し、取得したキー入力を仮想シリアルポートへ送信します。
 
+## モジュール構成
+
+- `key2ser/__init__.py`: パッケージの公開モジュールを定義します。
+- `key2ser/cli.py`: CLI引数の解析と実行エントリポイントを担います。
+- `key2ser/config.py`: `config.ini` を読み込み、設定値を検証してデータクラスにまとめます。
+- `key2ser/keymap.py`: キーコードと送信文字のマッピング（英数/かな）を管理します。
+- `key2ser/runner.py`: evdevのイベントループを起動し、キー入力をシリアルへ送信します。
+
 ## 動作環境
 
 - Linux (evdev に対応している環境)
