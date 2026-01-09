@@ -14,11 +14,15 @@ class KeyMapper:
     kana_unshifted: Dict[str, str] = field(default_factory=dict)
     kana_shifted: Dict[str, str] = field(default_factory=dict)
     
+    # キーコードと状態から送信文字を引き当てる。
     def map_keycode(self, keycode: str, shift: bool, *, kana: bool = False) -> Optional[str]:
+        """シフト/かな状態を考慮してキーコードを文字に変換する。"""
         if kana:
+            # かなモード時はシフト有無に応じたマッピングを優先する。
             mapped = self.kana_shifted.get(keycode) if shift else self.kana_unshifted.get(keycode)
             if mapped is not None:
                 return mapped
+            # かなのシフト表に無ければ通常のかな表へフォールバックする。
             fallback = self.kana_unshifted.get(keycode)
             if fallback is not None:
                 return fallback
