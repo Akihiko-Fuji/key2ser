@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import errno
 import logging
 from pathlib import Path
 import select
@@ -142,7 +143,15 @@ def _open_serial_port(config: AppConfig) -> serial.Serial:
             timeout=config.serial.timeout,
         )
     except (serial.SerialException, OSError) as exc:
-        raise SerialConnectionError("シリアルポートを開けませんでした。") from exc
+        reason = str(exc)
+        if isinstance(exc, OSError):
+            if exc.errno == errno.ENOENT:
+                reason = "デバイスが存在しません。"
+            elif exc.errno == errno.EACCES:
+                reason = "アクセス権限がありません。"
+        raise SerialConnectionError(
+            f"シリアルポートを開けませんでした: {config.serial.port} ({reason})"
+        ) from exc
 
 
 # 起動時にデバイス情報をログ出力する。
