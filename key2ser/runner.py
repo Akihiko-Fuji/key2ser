@@ -95,6 +95,8 @@ def _encode_payload(payload: str, encoding: str) -> bytes:
     except UnicodeEncodeError as exc:
         raise ValueError("指定されたエンコーディングで変換できない文字が含まれています。") from exc
 
+    except LookupError as exc:
+        raise ValueError("output.encoding に未対応の文字コードが指定されています。") from exc
 
 def _send_payload(port: serial.Serial, payload: str, encoding: str) -> None:
     data = _encode_payload(payload, encoding)
@@ -298,7 +300,24 @@ def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: K
     state = BufferState()
     with _open_serial_port(config) as port:
         _log_device_info(device, config)
-
+        try:
+            event_iterator = device.read_loop()
+        except OSError as exc:
+            raise DeviceAccessError("入力デバイスの監視を開始できませんでした。") from exc
+        try:
+            for event in event_iterator:
+                _process_key_event(
+                    event,
+                    state=state,
+                    keymap=keymap,
+                    line_end=config.output.line_end,
+                    send_on_enter=config.output.send_on_enter,
+                    send_mode=config.output.send_mode,
+                    port=port,
+                    encoding=config.output.encoding,
+                )
+        except OSError as exc:
+            raise DeviceAccessError("入力デバイスの読み取りに失敗しました。") from exc
 
 def run_event_loop(config: AppConfig, *, keymap: KeyMapper = DEFAULT_KEYMAP) -> None:
     if config.input.mode != "evdev":
