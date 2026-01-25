@@ -366,13 +366,9 @@ def _process_key_event(
     *,
     state: BufferState,
     keymap: KeyMapper,
-    line_end: str,
-    send_on_enter: bool,
-    send_mode: str,
+    output: OutputConfig,
     port: serial.Serial,
     encoding: str,
-    dedup_window_seconds: float,
-    serial_config: SerialConfig,
 ) -> None:
     """EV_KEYイベントのみを処理して送信する。"""
     if event.type != ecodes.EV_KEY:
@@ -384,18 +380,18 @@ def _process_key_event(
                 keycode,
                 state,
                 keymap,
-                line_end,
-                send_on_enter,
-                send_mode,
+                output.line_end,
+                output.send_on_enter,
+                output.send_mode,
             )
             if payload is not None:
                 _send_payload_with_dedup(
                     port,
                     payload,
                     state=state,
-                    send_mode=send_mode,
-                    encoding=encoding,
-                    dedup_window_seconds=dedup_window_seconds,
+                    send_mode=output.send_mode,
+                    encoding=output.encoding,
+                    dedup_window_seconds=output.dedup_window_seconds,
                     serial_config=serial_config,
                 )
     elif key_event.keystate == key_event.key_up:
@@ -464,12 +460,8 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                     event,
                     state=state,
                     keymap=keymap,
-                    line_end=output.line_end,
-                    send_on_enter=output.send_on_enter,
-                    send_mode=output.send_mode,
+                    output=output,
                     port=port,
-                    encoding=output.encoding,
-                    dedup_window_seconds=output.dedup_window_seconds,
                     serial_config=serial_config,
                 )
 
@@ -492,12 +484,8 @@ def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: K
                     event,
                     state=state,
                     keymap=keymap,
-                    line_end=output.line_end,
-                    send_on_enter=output.send_on_enter,
-                    send_mode=output.send_mode,
+                    output=output,
                     port=port,
-                    encoding=output.encoding,
-                    dedup_window_seconds=output.dedup_window_seconds,
                     serial_config=serial_config,
                 )
         except OSError as exc:
