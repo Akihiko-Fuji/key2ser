@@ -107,6 +107,14 @@ reconnect_interval_seconds=3
 port=/dev/ttyV0
 baudrate=9600
 timeout=1
+bytesize=8
+parity=none
+stopbits=1
+xonxoff=false
+rtscts=false
+dsrdtr=false
+emulate_modem_signals=false
+emulate_timing=false
 
 [output]
 encoding=utf-8
@@ -121,6 +129,14 @@ dedup_window_seconds=0.2
 - `vendor_id` と `product_id` を両方指定すると該当デバイスのみを使用します。
 - `device` を指定すると特定の `/dev/input/event*` を優先します。
 - `reconnect_interval_seconds` は入力デバイスやシリアルの読み取りに失敗した際に再接続を試みる間隔（秒）です。0 にすると再試行しません。
+- `bytesize` はデータビット長（5/6/7/8）を指定します。
+- `parity` はパリティビット（none/odd/even/mark/space）を指定します。
+- `stopbits` はストップビット（1/1.5/2）を指定します。
+- `xonxoff` はソフトウェアフロー制御の有無を指定します。
+- `rtscts` はRTS/CTSのハードウェアフロー制御を有効にします。
+- `dsrdtr` はDSR/DTRのハードウェアフロー制御を有効にします。
+- `emulate_modem_signals` はDTR/RTSを明示的にONにして仮想ポートでもハードウェアらしく振る舞わせます。
+- `emulate_timing` は仮想TTYで実際の通信速度が再現されない場合に、設定された通信パラメータに合わせて送信間隔を調整します。
 - `send_mode` は送信タイミングを指定します。
   - `on_enter`: Enter を受信したタイミングでバッファを送信します（バーコードリーダー向けの既定値）。Enter キー自体は送信せず、末尾には `line_end` を付与します。
   - `per_char`: 入力された文字を都度送信します。
