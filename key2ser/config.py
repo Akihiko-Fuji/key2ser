@@ -21,6 +21,14 @@ class SerialConfig:
     port: str
     baudrate: int
     timeout: float
+    bytesize: int
+    parity: str
+    stopbits: float
+    xonxoff: bool
+    rtscts: bool
+    dsrdtr: bool
+    emulate_modem_signals: bool
+    emulate_timing: bool
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,47 @@ def _get_bool(parser: configparser.ConfigParser, section: str, option: str, defa
     return parser.getboolean(section, option)
 
 
+# シリアルのデータビットをパースする。
+def _parse_bytesize(value: int) -> int:
+    """シリアルのデータビット設定を検証する。"""
+    if value not in {5, 6, 7, 8}:
+        raise ValueError("serial.bytesize は 5/6/7/8 のいずれかを指定してください。")
+    return value
+
+
+# シリアルのパリティをパースする。
+def _parse_parity(value: str) -> str:
+    """パリティ設定を正規化して返す。"""
+    normalized = value.strip().lower()
+    mapping = {
+        "n": "N",
+        "none": "N",
+        "e": "E",
+        "even": "E",
+        "o": "O",
+        "odd": "O",
+        "m": "M",
+        "mark": "M",
+        "s": "S",
+        "space": "S",
+    }
+    if normalized not in mapping:
+        raise ValueError("serial.parity は none/odd/even/mark/space のいずれかを指定してください。")
+    return mapping[normalized]
+
+
+# シリアルのストップビットをパースする。
+def _parse_stopbits(value: str) -> float:
+    """ストップビット設定を検証する。"""
+    try:
+        stopbits = float(value)
+    except ValueError as exc:
+        raise ValueError("serial.stopbits は 1/1.5/2 のいずれかを指定してください。") from exc
+    if stopbits not in {1.0, 1.5, 2.0}:
+        raise ValueError("serial.stopbits は 1/1.5/2 のいずれかを指定してください。")
+    return stopbits
+
+
 # 改行コードのエスケープ解釈を行う。
 def _parse_line_end(line_end: str, *, line_end_mode: str) -> str:
     """改行モードに応じてエスケープ変換を適用する。"""
@@ -109,8 +158,18 @@ def load_config(path: Path) -> AppConfig:
     if not port:
         raise ValueError("serial.port is required")
     baudrate = parser.getint("serial", "baudrate", fallback=9600)
+    if baudrate <= 0:
+        raise ValueError("serial.baudrate は 1 以上の値を指定してください。")
     timeout = parser.getfloat("serial", "timeout", fallback=1.0)
-
+    bytesize = _parse_bytesize(parser.getint("serial", "bytesize", fallback=8))
+    parity = _parse_parity(parser.get("serial", "parity", fallback="none"))
+    stopbits = _parse_stopbits(parser.get("serial", "stopbits", fallback="1"))
+    xonxoff = _get_bool(parser, "serial", "xonxoff", False)
+    rtscts = _get_bool(parser, "serial", "rtscts", False)
+    dsrdtr = _get_bool(parser, "serial", "dsrdtr", False)
+    emulate_modem_signals = _get_bool(parser, "serial", "emulate_modem_signals", False)
+    emulate_timing = _get_bool(parser, "serial", "emulate_timing", False)
+    
     # 送信方式に応じて改行や送信トリガーを決める。
     encoding = parser.get("output", "encoding", fallback="utf-8").strip()
     line_end_mode = parser.get("output", "line_end_mode", fallback="literal").strip().lower() or "literal"
@@ -138,7 +197,19 @@ def load_config(path: Path) -> AppConfig:
             grab=grab,
             reconnect_interval_seconds=reconnect_interval_seconds,
         ),
-        serial=SerialConfig(port=port, baudrate=baudrate, timeout=timeout),
+        serial=SerialConfig(
+            port=port,
+            baudrate=baudrate,
+            timeout=timeout,
+            bytesize=bytesize,
+            parity=parity,
+            stopbits=stopbits,
+            xonxoff=xonxoff,
+            rtscts=rtscts,
+            dsrdtr=dsrdtr,
+            emulate_modem_signals=emulate_modem_signals,
+            emulate_timing=emulate_timing,
+        ),
         output=OutputConfig(
             encoding=encoding,
             line_end=line_end,
