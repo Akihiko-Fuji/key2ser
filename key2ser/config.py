@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import configparser
 from pathlib import Path
+import re
 from typing import Optional
 
 
@@ -21,19 +22,26 @@ class SerialConfig:
     port: str
     baudrate: int
     timeout: float
+    write_timeout: Optional[float]
     bytesize: int
     parity: str
     stopbits: float
     xonxoff: bool
     rtscts: bool
     dsrdtr: bool
+    exclusive: Optional[bool]
     emulate_modem_signals: bool
+    dtr: Optional[bool]
+    rts: Optional[bool]
     emulate_timing: bool
-
+    pty_link: Optional[str]
+    pty_mode: Optional[int]
+    pty_group: Optional[str]
 
 @dataclass(frozen=True)
 class OutputConfig:
     encoding: str
+    encoding_errors: str
     line_end: str
     line_end_mode: str
     send_on_enter: bool
@@ -64,6 +72,32 @@ def _parse_optional_int(value: Optional[str], *, field_name: str) -> Optional[in
         return int(value, 0)
     except ValueError as exc:
         raise ValueError(f"{field_name} must be integer (decimal or hex)") from exc
+
+
+# 任意指定の数値項目をfloatに変換する。
+def _parse_optional_float(value: Optional[str], *, field_name: str) -> Optional[float]:
+    """空文字やNoneを許容しつつ小数値をパースする。"""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be float") from exc
+
+
+# 任意指定の真偽値を取得する。
+def _parse_optional_bool(
+    parser: configparser.ConfigParser,
+    section: str,
+    option: str,
+) -> Optional[bool]:
+    """指定されていない場合はNoneを返す。"""
+    if not parser.has_option(section, option):
+        return None
+    return parser.getboolean(section, option)
 
 
 # 真偽値の設定をデフォルト込みで取得する。
@@ -115,6 +149,19 @@ def _parse_stopbits(value: str) -> float:
     return stopbits
 
 
+# PTYのパーミッションをパースする。
+def _parse_optional_mode(value: Optional[str]) -> Optional[int]:
+    """PTYのパーミッションを数値に変換する。"""
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if not re.fullmatch(r"[0-7]+", normalized):
+        raise ValueError("serial.pty_mode は 0-7 の数字のみで指定してください。")
+    return int(normalized, 8)
+
+
 # 改行コードのエスケープ解釈を行う。
 def _parse_line_end(line_end: str, *, line_end_mode: str) -> str:
     """改行モードに応じてエスケープ変換を適用する。"""
@@ -161,17 +208,39 @@ def load_config(path: Path) -> AppConfig:
     if baudrate <= 0:
         raise ValueError("serial.baudrate は 1 以上の値を指定してください。")
     timeout = parser.getfloat("serial", "timeout", fallback=1.0)
+    write_timeout = _parse_optional_float(parser.get("serial", "write_timeout", fallback=None), field_name="write_timeout")
+    if write_timeout is not None and write_timeout < 0:
+        raise ValueError("serial.write_timeout は 0 以上の値を指定してください。")
     bytesize = _parse_bytesize(parser.getint("serial", "bytesize", fallback=8))
     parity = _parse_parity(parser.get("serial", "parity", fallback="none"))
     stopbits = _parse_stopbits(parser.get("serial", "stopbits", fallback="1"))
     xonxoff = _get_bool(parser, "serial", "xonxoff", False)
     rtscts = _get_bool(parser, "serial", "rtscts", False)
     dsrdtr = _get_bool(parser, "serial", "dsrdtr", False)
+    exclusive = _parse_optional_bool(parser, "serial", "exclusive")
     emulate_modem_signals = _get_bool(parser, "serial", "emulate_modem_signals", False)
+    dtr = _parse_optional_bool(parser, "serial", "dtr")
+    rts = _parse_optional_bool(parser, "serial", "rts")
     emulate_timing = _get_bool(parser, "serial", "emulate_timing", False)
-    
+    pty_link = parser.get("serial", "pty_link", fallback="").strip() or None
+    pty_mode = _parse_optional_mode(parser.get("serial", "pty_mode", fallback=None))
+    pty_group = parser.get("serial", "pty_group", fallback="").strip() or None
+   
     # 送信方式に応じて改行や送信トリガーを決める。
     encoding = parser.get("output", "encoding", fallback="utf-8").strip()
+    encoding_errors = parser.get("output", "encoding_errors", fallback="strict").strip().lower() or "strict"
+    valid_encoding_errors = {
+        "strict",
+        "replace",
+        "ignore",
+        "backslashreplace",
+        "xmlcharrefreplace",
+        "namereplace",
+    }
+    if encoding_errors not in valid_encoding_errors:
+        raise ValueError(
+            "output.encoding_errors は strict/replace/ignore/backslashreplace/xmlcharrefreplace/namereplace のいずれかを指定してください。"
+        )
     line_end_mode = parser.get("output", "line_end_mode", fallback="literal").strip().lower() or "literal"
     if line_end_mode not in {"literal", "escape"}:
         raise ValueError("output.line_end_mode は literal / escape のいずれかを指定してください。")
@@ -201,17 +270,25 @@ def load_config(path: Path) -> AppConfig:
             port=port,
             baudrate=baudrate,
             timeout=timeout,
+            write_timeout=write_timeout,
             bytesize=bytesize,
             parity=parity,
             stopbits=stopbits,
             xonxoff=xonxoff,
             rtscts=rtscts,
             dsrdtr=dsrdtr,
+            exclusive=exclusive,
             emulate_modem_signals=emulate_modem_signals,
+            dtr=dtr,
+            rts=rts,
             emulate_timing=emulate_timing,
+            pty_link=pty_link,
+            pty_mode=pty_mode,
+            pty_group=pty_group,
         ),
         output=OutputConfig(
             encoding=encoding,
+            encoding_errors=encoding_errors,
             line_end=line_end,
             line_end_mode=line_end_mode,
             send_on_enter=send_on_enter,
