@@ -177,6 +177,7 @@ def _should_suppress_duplicate(
     return now - state.last_sent_time <= dedup_window_seconds
 
 
+# 重複送信を抑止しながらペイロードを送信する
 def _send_payload_with_dedup(
     port: serial.Serial,
     payload: str,
@@ -338,6 +339,7 @@ def _maybe_flush_idle_timeout(
     return payload
 
 
+# 送信ペイロードがあれば重複抑止付きで送信する
 def _send_payload_if_present(
     payload: Optional[str],
     *,
@@ -368,7 +370,7 @@ def _process_key_event(
     keymap: KeyMapper,
     output: OutputConfig,
     port: serial.Serial,
-    encoding: str,
+    serial_config: SerialConfig,
 ) -> None:
     """EV_KEYイベントのみを処理して送信する。"""
     if event.type != ecodes.EV_KEY:
@@ -384,16 +386,13 @@ def _process_key_event(
                 output.send_on_enter,
                 output.send_mode,
             )
-            if payload is not None:
-                _send_payload_with_dedup(
-                    port,
-                    payload,
-                    state=state,
-                    send_mode=output.send_mode,
-                    encoding=output.encoding,
-                    dedup_window_seconds=output.dedup_window_seconds,
-                    serial_config=serial_config,
-                )
+            _send_payload_if_present(
+                payload,
+                port=port,
+                state=state,
+                output=output,
+                serial_config=serial_config,
+            )
     elif key_event.keystate == key_event.key_up:
         for keycode in _iter_keycodes(key_event):
             _handle_key_up(keycode, state)
