@@ -31,6 +31,11 @@ line_end=\r\n
     assert config.input.product_id == 0xABCD
     assert config.input.reconnect_interval_seconds == 3.0
     assert config.serial.port == "/dev/ttyV0"
+    assert config.serial.bytesize == 8
+    assert config.serial.parity == "N"
+    assert config.serial.stopbits == 1.0
+    assert config.serial.emulate_modem_signals is False
+    assert config.serial.emulate_timing is False
     assert config.output.dedup_window_seconds == 0.2
 
 
@@ -75,6 +80,42 @@ line_end=\\r\\n
     assert config.output.line_end == "\r\n"
 
 
+def test_load_config_parses_serial_settings(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+bytesize=7
+parity=even
+stopbits=2
+xonxoff=true
+rtscts=true
+dsrdtr=true
+emulate_modem_signals=true
+emulate_timing=true
+
+[output]
+encoding=utf-8
+line_end=\r\n
+""".strip()
+    )
+
+    config = load_config(config_file)
+
+    assert config.serial.bytesize == 7
+    assert config.serial.parity == "E"
+    assert config.serial.stopbits == 2.0
+    assert config.serial.xonxoff is True
+    assert config.serial.rtscts is True
+    assert config.serial.dsrdtr is True
+    assert config.serial.emulate_modem_signals is True
+    assert config.serial.emulate_timing is True
+
+
 def test_load_config_rejects_negative_dedup_window(tmp_path: Path) -> None:
     config_file = tmp_path / "config.ini"
     config_file.write_text(
@@ -91,6 +132,69 @@ dedup_window_seconds=-1
     )
 
     with pytest.raises(ValueError, match="output.dedup_window_seconds は 0 以上の値を指定してください。"):
+        load_config(config_file)
+
+
+def test_load_config_rejects_invalid_parity(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+parity=invalid
+
+[output]
+encoding=utf-8
+line_end=\r\n
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="serial.parity は none/odd/even/mark/space のいずれかを指定してください。"):
+        load_config(config_file)
+
+
+def test_load_config_rejects_invalid_baudrate(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+baudrate=0
+
+[output]
+encoding=utf-8
+line_end=\r\n
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="serial.baudrate は 1 以上の値を指定してください。"):
+        load_config(config_file)
+
+
+def test_load_config_rejects_invalid_stopbits(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+stopbits=3
+
+[output]
+encoding=utf-8
+line_end=\r\n
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="serial.stopbits は 1/1.5/2 のいずれかを指定してください。"):
         load_config(config_file)
 
 
