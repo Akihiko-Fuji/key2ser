@@ -56,6 +56,8 @@ sudo socat -d -d pty,raw,echo=0,link=/dev/ttyV0,mode=660,group=dialout \
 
 送信側が `/dev/ttyV0`、受信側が `/dev/ttyV1` になります。
 
+`serial.port=auto` を指定すると、起動時に仮想TTYペアを作成し、ログに受信側ポートを表示します。安定したパスが必要な場合は `pty_link` を併用してください。
+
 #### これまでの流れ（仮想TTY作成〜実行）
 
 1. 仮想シリアルポートを作成します。
@@ -105,19 +107,28 @@ reconnect_interval_seconds=3
 
 [serial]
 port=/dev/ttyV0
+# port=auto
+# pty_link=/dev/ttyV0
+# pty_mode=660
+# pty_group=dialout
 baudrate=9600
 timeout=1
+write_timeout=
 bytesize=8
 parity=none
 stopbits=1
 xonxoff=false
 rtscts=false
 dsrdtr=false
+exclusive=
 emulate_modem_signals=false
+dtr=
+rts=
 emulate_timing=false
 
 [output]
 encoding=utf-8
+encoding_errors=strict
 line_end_mode=escape
 line_end=\r\n
 send_on_enter=true
@@ -135,8 +146,15 @@ dedup_window_seconds=0.2
 - `xonxoff` はソフトウェアフロー制御の有無を指定します。
 - `rtscts` はRTS/CTSのハードウェアフロー制御を有効にします。
 - `dsrdtr` はDSR/DTRのハードウェアフロー制御を有効にします。
-- `emulate_modem_signals` はDTR/RTSを明示的にONにして仮想ポートでもハードウェアらしく振る舞わせます。
+- `exclusive` はシリアルポートを排他的に開くかどうかを指定します（`true`/`false`/空欄）。空欄の場合は実装の既定値に従います。
+- `write_timeout` は書き込みタイムアウトを秒で指定します。空欄にすると無制限です。
+- `emulate_modem_signals` はDTR/RTSを明示的にONにして仮想ポートでもハードウェアらしく振る舞わせます（`dtr`/`rts` 未指定時のみ）。
+- `dtr`/`rts` はモデム制御線を明示的にON/OFFします（`true`/`false`）。
 - `emulate_timing` は仮想TTYで実際の通信速度が再現されない場合に、設定された通信パラメータに合わせて送信間隔を調整します。
+- `port=auto` を指定すると、内部で仮想TTYペアを生成します。
+- `pty_link` は外部アプリ向けの仮想TTYへのシンボリックリンクを作成します。
+- `pty_mode` は `pty_link` のパーミッションを8進数で指定します。
+- `pty_group` は `pty_link` のグループを指定します。
 - `send_mode` は送信タイミングを指定します。
   - `on_enter`: Enter を受信したタイミングでバッファを送信します（バーコードリーダー向けの既定値）。Enter キー自体は送信せず、末尾には `line_end` を付与します。
   - `per_char`: 入力された文字を都度送信します。
@@ -144,10 +162,12 @@ dedup_window_seconds=0.2
 - `line_end_mode` は `line_end` の解釈方法を指定します。
   - `literal`: そのまま送信します。
   - `escape`: `\r` や `\n` といったエスケープシーケンスを実際の改行として解釈します。
+- `encoding_errors` はエンコーディング変換に失敗した場合の挙動を指定します（`strict`/`replace`/`ignore`/`backslashreplace`/`xmlcharrefreplace`/`namereplace`）。
 - `send_on_enter` は `send_mode=on_enter` のときのみ有効で、Enter のみが入力された場合でも空文字を送信するかどうかを指定します。
 - `idle_timeout_seconds` は `send_mode=idle_timeout` のときに使用する待機時間（秒）です。
 - `dedup_window_seconds` は直近の送信と同じ内容が連続した場合に抑止する時間（秒）です。0 を指定すると抑止しません。
 - `mode=evdev` は、Linux の evdev（`/dev/input/event*`）経由で入力イベントを読む方式を指定しています。値は evdev を前提にしており、現時点で他の値を想定していません。
+- `exclusive=false` の場合は共有オープンになりますが、複数プロセスからの同時書き込みに対する順序保証はありません。
 
 ## 実行方法
 
