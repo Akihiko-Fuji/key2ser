@@ -11,7 +11,7 @@ from typing import Iterable, Optional, Set
 from evdev import InputDevice, categorize, ecodes, list_devices
 import serial
 
-from key2ser.config import AppConfig, InputConfig
+from key2ser.config import AppConfig, InputConfig, SerialConfig
 from key2ser.keymap import DEFAULT_KEYMAP, KANA_TOGGLE_KEYCODES, SHIFT_KEYCODES, KeyMapper
 
 
@@ -111,6 +111,44 @@ def _encode_payload(payload: str, encoding: str) -> bytes:
     except LookupError as exc:
         raise ValueError("output.encoding に未対応の文字コードが指定されています。") from exc
 
+# シリアルのフレーム時間（1バイト分の転送時間）を求める。
+def _calculate_frame_seconds(serial_config: SerialConfig) -> float:
+    """通信設定に応じた1バイトの伝送時間を返す。"""
+    parity_bits = 0 if serial_config.parity == "N" else 1
+    bits_per_frame = 1 + serial_config.bytesize + parity_bits + serial_config.stopbits
+    return bits_per_frame / serial_config.baudrate
+
+
+# シリアルの通信速度に合わせて1バイトずつ送信する
+def _send_payload_with_timing(
+    port: serial.Serial,
+    payload: str,
+    *,
+    encoding: str,
+    serial_config: SerialConfig,
+) -> None:
+    """シリアルの通信速度に合わせて1バイトずつ送信する。"""
+    data = _encode_payload(payload, encoding)
+    if not data:
+        return
+    frame_seconds = _calculate_frame_seconds(serial_config)
+    if frame_seconds <= 0:
+        _send_payload(port, payload, encoding)
+        return
+    # 仮想TTYは通信速度の制約がないため、実機に近づける目的で送信間隔を制御する。
+    next_time = time.monotonic()
+    try:
+        for byte in data:
+            port.write(bytes([byte]))
+            next_time += frame_seconds
+            sleep_seconds = next_time - time.monotonic()
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+        port.flush()
+    except (serial.SerialException, OSError) as exc:
+        raise SerialConnectionError("シリアルへの送信に失敗しました。") from exc
+
+
 # シリアルへデータを送信する。
 def _send_payload(port: serial.Serial, payload: str, encoding: str) -> None:
     """シリアルポートにペイロードを書き込み送信する。"""
@@ -147,6 +185,7 @@ def _send_payload_with_dedup(
     send_mode: str,
     encoding: str,
     dedup_window_seconds: float,
+    serial_config: SerialConfig,
 ) -> None:
     """重複送信を抑止しながらペイロードを送信する。"""
     now = time.monotonic()
@@ -159,7 +198,10 @@ def _send_payload_with_dedup(
         ):
             # バーコードリーダーの二重送信を抑止するため、短時間の同一ペイロードは無視する。
             return
-    _send_payload(port, payload, encoding)
+    if serial_config.emulate_timing:
+        _send_payload_with_timing(port, payload, encoding=encoding, serial_config=serial_config)
+    else:
+        _send_payload(port, payload, encoding)
     state.last_sent_payload = payload
     state.last_sent_time = now
 
@@ -181,11 +223,25 @@ def _iter_keycodes(key_event) -> Iterable[str]:
 def _open_serial_port(config: AppConfig) -> serial.Serial:
     """設定に従ってシリアルポートを開き例外を変換する。"""
     try:
-        return serial.Serial(
+        port = serial.Serial(
             port=config.serial.port,
             baudrate=config.serial.baudrate,
             timeout=config.serial.timeout,
+            bytesize=config.serial.bytesize,
+            parity=config.serial.parity,
+            stopbits=config.serial.stopbits,
+            xonxoff=config.serial.xonxoff,
+            rtscts=config.serial.rtscts,
+            dsrdtr=config.serial.dsrdtr,
         )
+        if config.serial.emulate_modem_signals:
+            # 実機に近づけるためにモデム制御線を明示的に立ち上げる。
+            try:
+                port.setDTR(True)
+                port.setRTS(True)
+            except (serial.SerialException, OSError) as exc:
+                raise SerialConnectionError("モデム制御線の設定に失敗しました。") from exc
+        return port
     except (serial.SerialException, OSError) as exc:
         reason = str(exc)
         if isinstance(exc, OSError):
@@ -295,6 +351,7 @@ def _process_key_event(
     port: serial.Serial,
     encoding: str,
     dedup_window_seconds: float,
+    serial_config: SerialConfig,
 ) -> None:
     """EV_KEYイベントのみを処理して送信する。"""
     if event.type != ecodes.EV_KEY:
@@ -318,6 +375,7 @@ def _process_key_event(
                     send_mode=send_mode,
                     encoding=encoding,
                     dedup_window_seconds=dedup_window_seconds,
+                    serial_config=serial_config,
                 )
     elif key_event.keystate == key_event.key_up:
         for keycode in _iter_keycodes(key_event):
@@ -328,19 +386,21 @@ def _process_key_event(
 def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keymap: KeyMapper) -> None:
     """一定時間入力が止まったら送信するモードのループ。"""
     state = BufferState()
+    output = config.output
+    serial_config = config.serial
     with _open_serial_port(config) as port:
         _log_device_info(device, config)
         while True:
             if state.text and state.last_input_time is not None:
                 now = time.monotonic()
                 # 入力停止の残り時間を計算して待機時間に使う。
-                remaining = config.output.idle_timeout_seconds - (now - state.last_input_time)
+                remaining = output.idle_timeout_seconds - (now - state.last_input_time)
                 if remaining <= 0:
                     # タイムアウトを超えたら入力待ちより先に送信して遅延を抑える。
                     payload = _maybe_flush_idle_timeout(
                         state,
-                        line_end=config.output.line_end,
-                        idle_timeout_seconds=config.output.idle_timeout_seconds,
+                        line_end=output.line_end,
+                        idle_timeout_seconds=output.idle_timeout_seconds,
                         now=now,
                     )
                     if payload is not None:
@@ -348,9 +408,10 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                             port,
                             payload,
                             state=state,
-                            send_mode=config.output.send_mode,
-                            encoding=config.output.encoding,
-                            dedup_window_seconds=config.output.dedup_window_seconds,
+                            send_mode=output.send_mode,
+                            encoding=output.encoding,
+                            dedup_window_seconds=output.dedup_window_seconds,
+                            serial_config=serial_config,
                         )
                     continue
                 timeout = remaining
@@ -364,8 +425,8 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
             if not readable:
                 payload = _maybe_flush_idle_timeout(
                     state,
-                    line_end=config.output.line_end,
-                    idle_timeout_seconds=config.output.idle_timeout_seconds,
+                    line_end=output.line_end,
+                    idle_timeout_seconds=output.idle_timeout_seconds,
                     now=time.monotonic(),
                 )
                 if payload is not None:
@@ -373,9 +434,10 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                         port,
                         payload,
                         state=state,
-                        send_mode=config.output.send_mode,
-                        encoding=config.output.encoding,
-                        dedup_window_seconds=config.output.dedup_window_seconds,
+                        send_mode=output.send_mode,
+                        encoding=output.encoding,
+                        dedup_window_seconds=output.dedup_window_seconds,
+                        serial_config=serial_config,
                     )
                 continue
             try:
@@ -387,12 +449,13 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                     event,
                     state=state,
                     keymap=keymap,
-                    line_end=config.output.line_end,
-                    send_on_enter=config.output.send_on_enter,
-                    send_mode=config.output.send_mode,
+                    line_end=output.line_end,
+                    send_on_enter=output.send_on_enter,
+                    send_mode=output.send_mode,
                     port=port,
-                    encoding=config.output.encoding,
-                    dedup_window_seconds=config.output.dedup_window_seconds,
+                    encoding=output.encoding,
+                    dedup_window_seconds=output.dedup_window_seconds,
+                    serial_config=serial_config,
                 )
 
 
@@ -400,6 +463,8 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
 def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: KeyMapper) -> None:
     """Enter送信/逐次送信向けのイベントループ。"""
     state = BufferState()
+    output = config.output
+    serial_config = config.serial
     with _open_serial_port(config) as port:
         _log_device_info(device, config)
         try:
@@ -412,12 +477,13 @@ def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: K
                     event,
                     state=state,
                     keymap=keymap,
-                    line_end=config.output.line_end,
-                    send_on_enter=config.output.send_on_enter,
-                    send_mode=config.output.send_mode,
+                    line_end=output.line_end,
+                    send_on_enter=output.send_on_enter,
+                    send_mode=output.send_mode,
                     port=port,
-                    encoding=config.output.encoding,
-                    dedup_window_seconds=config.output.dedup_window_seconds,
+                    encoding=output.encoding,
+                    dedup_window_seconds=output.dedup_window_seconds,
+                    serial_config=serial_config,
                 )
         except OSError as exc:
             raise DeviceAccessError("入力デバイスの読み取りに失敗しました。") from exc
