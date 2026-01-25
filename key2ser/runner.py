@@ -11,7 +11,7 @@ from typing import Iterable, Optional, Set
 from evdev import InputDevice, categorize, ecodes, list_devices
 import serial
 
-from key2ser.config import AppConfig, InputConfig, SerialConfig
+from key2ser.config import AppConfig, InputConfig, OutputConfig, SerialConfig
 from key2ser.keymap import DEFAULT_KEYMAP, KANA_TOGGLE_KEYCODES, SHIFT_KEYCODES, KeyMapper
 
 
@@ -334,9 +334,30 @@ def _maybe_flush_idle_timeout(
     if now - state.last_input_time < idle_timeout_seconds:
         return None
     payload = state.text + line_end
-    state.text = ""
-    state.last_input_time = None
+    _reset_buffer(state)
     return payload
+
+
+def _send_payload_if_present(
+    payload: Optional[str],
+    *,
+    port: serial.Serial,
+    state: BufferState,
+    output: OutputConfig,
+    serial_config: SerialConfig,
+) -> None:
+    """送信ペイロードがあれば重複抑止付きで送信する。"""
+    if payload is None:
+        return
+    _send_payload_with_dedup(
+        port,
+        payload,
+        state=state,
+        send_mode=output.send_mode,
+        encoding=output.encoding,
+        dedup_window_seconds=output.dedup_window_seconds,
+        serial_config=serial_config,
+    )
 
 
 # キーイベントを解析して必要に応じて送信する。
@@ -403,16 +424,13 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                         idle_timeout_seconds=output.idle_timeout_seconds,
                         now=now,
                     )
-                    if payload is not None:
-                        _send_payload_with_dedup(
-                            port,
-                            payload,
-                            state=state,
-                            send_mode=output.send_mode,
-                            encoding=output.encoding,
-                            dedup_window_seconds=output.dedup_window_seconds,
-                            serial_config=serial_config,
-                        )
+                    _send_payload_if_present(
+                        payload,
+                        port=port,
+                        state=state,
+                        output=output,
+                        serial_config=serial_config,
+                    )
                     continue
                 timeout = remaining
             else:
@@ -429,16 +447,13 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
                     idle_timeout_seconds=output.idle_timeout_seconds,
                     now=time.monotonic(),
                 )
-                if payload is not None:
-                    _send_payload_with_dedup(
-                        port,
-                        payload,
-                        state=state,
-                        send_mode=output.send_mode,
-                        encoding=output.encoding,
-                        dedup_window_seconds=output.dedup_window_seconds,
-                        serial_config=serial_config,
-                    )
+                _send_payload_if_present(
+                    payload,
+                    port=port,
+                    state=state,
+                    output=output,
+                    serial_config=serial_config,
+                )
                 continue
             try:
                 events = list(device.read())
