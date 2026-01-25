@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import errno
 import sys
 import types
@@ -20,6 +21,22 @@ sys.modules.setdefault("serial", serial_stub)
 
 from key2ser.config import AppConfig, InputConfig, OutputConfig, SerialConfig
 from key2ser import runner
+
+
+def _default_serial_config() -> SerialConfig:
+    return SerialConfig(
+        port="/dev/ttyV0",
+        baudrate=9600,
+        timeout=1.0,
+        bytesize=8,
+        parity="N",
+        stopbits=1.0,
+        xonxoff=False,
+        rtscts=False,
+        dsrdtr=False,
+        emulate_modem_signals=False,
+        emulate_timing=False,
+    )
 
 
 def test_runner_per_char_sends_immediately() -> None:
@@ -178,9 +195,9 @@ def test_open_serial_port_handles_serial_exception(monkeypatch) -> None:
             vendor_id=None,
             product_id=None,
             grab=False,
-        reconnect_interval_seconds=0,
+            reconnect_interval_seconds=0,
         ),
-        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        serial=_default_serial_config(),
         output=OutputConfig(
             encoding="utf-8",
             line_end="\r\n",
@@ -214,7 +231,7 @@ def test_open_serial_port_handles_missing_device(monkeypatch) -> None:
             grab=False,
             reconnect_interval_seconds=0,
         ),
-        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        serial=_default_serial_config(),
         output=OutputConfig(
             encoding="utf-8",
             line_end="\r\n",
@@ -231,6 +248,100 @@ def test_open_serial_port_handles_missing_device(monkeypatch) -> None:
         match=r"シリアルポートを開けませんでした: /dev/ttyV0 \(デバイスが存在しません。\)",
     ):
         runner._open_serial_port(config)
+
+
+def test_open_serial_port_passes_serial_settings(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class DummyPort:
+        pass
+
+    def fake_serial(**kwargs):
+        captured.update(kwargs)
+        return DummyPort()
+
+    monkeypatch.setattr(runner.serial, "Serial", fake_serial)
+
+    config = AppConfig(
+        input=InputConfig(
+            mode="evdev",
+            device="/dev/input/event0",
+            vendor_id=None,
+            product_id=None,
+            grab=False,
+            reconnect_interval_seconds=0,
+        ),
+        serial=replace(
+            _default_serial_config(),
+            bytesize=7,
+            parity="E",
+            stopbits=2.0,
+            xonxoff=True,
+            rtscts=True,
+            dsrdtr=True,
+        ),
+        output=OutputConfig(
+            encoding="utf-8",
+            line_end="\r\n",
+            line_end_mode="literal",
+            send_on_enter=True,
+            send_mode="on_enter",
+            idle_timeout_seconds=0.5,
+            dedup_window_seconds=0.2,
+        ),
+    )
+
+    runner._open_serial_port(config)
+
+    assert captured["bytesize"] == 7
+    assert captured["parity"] == "E"
+    assert captured["stopbits"] == 2.0
+    assert captured["xonxoff"] is True
+    assert captured["rtscts"] is True
+    assert captured["dsrdtr"] is True
+
+
+def test_open_serial_port_emulates_modem_signals(monkeypatch) -> None:
+    class DummyPort:
+        def __init__(self) -> None:
+            self.dtr: bool | None = None
+            self.rts: bool | None = None
+
+        def setDTR(self, value: bool) -> None:
+            self.dtr = value
+
+        def setRTS(self, value: bool) -> None:
+            self.rts = value
+
+    dummy_port = DummyPort()
+
+    monkeypatch.setattr(runner.serial, "Serial", lambda **_kwargs: dummy_port)
+
+    config = AppConfig(
+        input=InputConfig(
+            mode="evdev",
+            device="/dev/input/event0",
+            vendor_id=None,
+            product_id=None,
+            grab=False,
+            reconnect_interval_seconds=0,
+        ),
+        serial=replace(_default_serial_config(), emulate_modem_signals=True),
+        output=OutputConfig(
+            encoding="utf-8",
+            line_end="\r\n",
+            line_end_mode="literal",
+            send_on_enter=True,
+            send_mode="on_enter",
+            idle_timeout_seconds=0.5,
+            dedup_window_seconds=0.2,
+        ),
+    )
+
+    port = runner._open_serial_port(config)
+
+    assert port.dtr is True
+    assert port.rts is True
 
 
 def test_send_payload_handles_serial_error() -> None:
@@ -269,6 +380,7 @@ def test_send_payload_with_dedup_suppresses_duplicate(monkeypatch) -> None:
         send_mode="on_enter",
         encoding="utf-8",
         dedup_window_seconds=0.2,
+        serial_config=_default_serial_config(),
     )
     runner._send_payload_with_dedup(
         port,
@@ -277,6 +389,7 @@ def test_send_payload_with_dedup_suppresses_duplicate(monkeypatch) -> None:
         send_mode="on_enter",
         encoding="utf-8",
         dedup_window_seconds=0.2,
+        serial_config=_default_serial_config(),
     )
 
     assert port.writes == [b"payload"]
@@ -306,6 +419,7 @@ def test_send_payload_with_dedup_allows_after_window(monkeypatch) -> None:
         send_mode="on_enter",
         encoding="utf-8",
         dedup_window_seconds=0.2,
+        serial_config=_default_serial_config(),
     )
     runner._send_payload_with_dedup(
         port,
@@ -314,6 +428,7 @@ def test_send_payload_with_dedup_allows_after_window(monkeypatch) -> None:
         send_mode="on_enter",
         encoding="utf-8",
         dedup_window_seconds=0.2,
+        serial_config=_default_serial_config(),
     )
 
     assert port.writes == [b"payload", b"payload"]
@@ -343,6 +458,7 @@ def test_send_payload_with_dedup_does_not_block_per_char(monkeypatch) -> None:
         send_mode="per_char",
         encoding="utf-8",
         dedup_window_seconds=0.2,
+        serial_config=_default_serial_config(),
     )
     runner._send_payload_with_dedup(
         port,
@@ -351,9 +467,42 @@ def test_send_payload_with_dedup_does_not_block_per_char(monkeypatch) -> None:
         send_mode="per_char",
         encoding="utf-8",
         dedup_window_seconds=0.2,
+        serial_config=_default_serial_config(),
     )
 
     assert port.writes == [b"a", b"a"]
+
+
+def test_send_payload_with_timing_emulation(monkeypatch) -> None:
+    class DummyPort:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+            self.flushed = False
+
+        def write(self, data: bytes) -> None:
+            self.writes.append(data)
+
+        def flush(self) -> None:
+            self.flushed = True
+
+    port = DummyPort()
+    state = runner.BufferState()
+
+    monkeypatch.setattr(runner.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+
+    runner._send_payload_with_dedup(
+        port,
+        "ab",
+        state=state,
+        send_mode="on_enter",
+        encoding="utf-8",
+        dedup_window_seconds=0.0,
+        serial_config=replace(_default_serial_config(), emulate_timing=True),
+    )
+
+    assert port.writes == [b"a", b"b"]
+    assert port.flushed is True
 
 
 def test_encode_payload_handles_invalid_encoding() -> None:
@@ -387,7 +536,7 @@ def test_run_event_loop_default_handles_read_loop_error(monkeypatch) -> None:
             grab=False,
             reconnect_interval_seconds=0,
         ),
-        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        serial=_default_serial_config(),
         output=OutputConfig(
             encoding="utf-8",
             line_end="\r\n",
@@ -431,7 +580,7 @@ def test_run_event_loop_default_handles_read_error(monkeypatch) -> None:
             grab=False,
             reconnect_interval_seconds=0,
         ),
-        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        serial=_default_serial_config(),
         output=OutputConfig(
             encoding="utf-8",
             line_end="\r\n",
@@ -500,7 +649,7 @@ def test_run_event_loop_default_sends_on_enter(monkeypatch) -> None:
             grab=False,
             reconnect_interval_seconds=0,
         ),
-        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        serial=_default_serial_config(),
         output=OutputConfig(
             encoding="utf-8",
             line_end="\r\n",
@@ -550,7 +699,7 @@ def test_run_event_loop_retries_on_serial_error(monkeypatch) -> None:
             grab=False,
             reconnect_interval_seconds=1.5,
         ),
-        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        serial=_default_serial_config(),
         output=OutputConfig(
             encoding="utf-8",
             line_end="\r\n",
@@ -584,7 +733,7 @@ def test_run_event_loop_raises_when_reconnect_disabled(monkeypatch) -> None:
             grab=False,
             reconnect_interval_seconds=0,
         ),
-        serial=SerialConfig(port="/dev/ttyV0", baudrate=9600, timeout=1.0),
+        serial=_default_serial_config(),
         output=OutputConfig(
             encoding="utf-8",
             line_end="\r\n",
