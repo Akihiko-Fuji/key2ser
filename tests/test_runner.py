@@ -20,7 +20,14 @@ serial_stub.SerialException = type("SerialException", (Exception,), {})
 serial_stub.SerialTimeoutException = type("SerialTimeoutException", (Exception,), {})
 sys.modules.setdefault("serial", serial_stub)
 
-from key2ser.config import AppConfig, InputConfig, OutputConfig, SerialConfig
+from key2ser.config import (
+    AppConfig,
+    InputConfig,
+    OutputConfig,
+    SerialConfig,
+    DEFAULT_PREFERRED_INPUT_KEYS,
+    DEFAULT_TERMINATOR_KEYS,
+)
 from key2ser import runner
 
 
@@ -55,6 +62,7 @@ def test_runner_per_char_sends_immediately() -> None:
         state,
         runner.DEFAULT_KEYMAP,
         "\r\n",
+        DEFAULT_TERMINATOR_KEYS,
         True,
         "per_char",
     )
@@ -73,6 +81,7 @@ def test_runner_idle_timeout_sends_after_wait(monkeypatch) -> None:
         state,
         runner.DEFAULT_KEYMAP,
         "\r\n",
+        DEFAULT_TERMINATOR_KEYS,
         True,
         "idle_timeout",
     )
@@ -110,6 +119,7 @@ def test_runner_on_enter_unchanged() -> None:
         state,
         runner.DEFAULT_KEYMAP,
         "\r\n",
+        DEFAULT_TERMINATOR_KEYS,
         True,
         "on_enter",
     )
@@ -122,11 +132,29 @@ def test_runner_on_enter_unchanged() -> None:
         state,
         runner.DEFAULT_KEYMAP,
         "\r\n",
+        DEFAULT_TERMINATOR_KEYS,
         True,
         "on_enter",
     )
 
     assert payload == "a\r\n"
+
+
+def test_runner_on_kpenter_terminates() -> None:
+    state = runner.BufferState()
+
+    state.text = "123"
+    payload = runner._handle_key_down(
+        "KEY_KPENTER",
+        state,
+        runner.DEFAULT_KEYMAP,
+        "\r\n",
+        DEFAULT_TERMINATOR_KEYS,
+        True,
+        "on_enter",
+    )
+
+    assert payload == "123\r\n"
 
 
 def test_open_input_device_handles_permission_error(monkeypatch, tmp_path) -> None:
@@ -143,6 +171,8 @@ def test_open_input_device_handles_permission_error(monkeypatch, tmp_path) -> No
         device=str(device_path),
         vendor_id=None,
         product_id=None,
+        device_name_contains=None,
+        prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
         grab=False,
         reconnect_interval_seconds=0,
     )
@@ -162,6 +192,8 @@ def test_open_input_device_handles_list_error(monkeypatch) -> None:
         device=None,
         vendor_id=0x1234,
         product_id=0x5678,
+        device_name_contains=None,
+        prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
         grab=False,
         reconnect_interval_seconds=0,
     )
@@ -182,6 +214,8 @@ def test_open_input_device_handles_device_open_error(monkeypatch) -> None:
         device=None,
         vendor_id=0x1234,
         product_id=0x5678,
+        device_name_contains=None,
+        prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
         grab=False,
         reconnect_interval_seconds=0,
     )
@@ -248,8 +282,16 @@ def test_select_device_by_vid_pid_closes_unmatched_devices(monkeypatch) -> None:
 
     selected = runner._select_device_by_vid_pid(
         devices.keys(),
-        vendor_id=0x1234,
-        product_id=0x5678,
+        InputConfig(
+            mode="evdev",
+            device=None,
+            vendor_id=0x1234,
+            product_id=0x5678,
+            device_name_contains=None,
+            prefer_event_has_keys=(),
+            grab=False,
+            reconnect_interval_seconds=0,
+        ),
     )
 
     assert selected is devices["/dev/input/event1"]
@@ -285,12 +327,115 @@ def test_select_device_by_vid_pid_closes_multiple_matches(monkeypatch) -> None:
     with pytest.raises(runner.DeviceNotFoundError, match="VID/PIDが一致するデバイスが複数あります。"):
         runner._select_device_by_vid_pid(
             devices.keys(),
-            vendor_id=0x1234,
-            product_id=0x5678,
+            InputConfig(
+                mode="evdev",
+                device=None,
+                vendor_id=0x1234,
+                product_id=0x5678,
+                device_name_contains=None,
+                prefer_event_has_keys=(),
+                grab=False,
+                reconnect_interval_seconds=0,
+            ),
         )
 
     assert devices["/dev/input/event0"].closed is True
     assert devices["/dev/input/event1"].closed is True
+
+
+def test_select_device_by_vid_pid_prefers_matching_keys(monkeypatch) -> None:
+    class DummyInfo:
+        def __init__(self, vendor: int, product: int) -> None:
+            self.vendor = vendor
+            self.product = product
+
+    class DummyDevice:
+        def __init__(self, path: str, has_keys: bool) -> None:
+            self.path = path
+            self.info = DummyInfo(0x1234, 0x5678)
+            self._has_keys = has_keys
+            self.closed = False
+
+        def capabilities(self) -> dict[int, list[int]]:
+            if self._has_keys:
+                return {runner.ecodes.EV_KEY: [runner.ecodes.KEY_ENTER]}
+            return {runner.ecodes.EV_KEY: []}
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(runner.ecodes, "KEY_ENTER", 28, raising=False)
+
+    devices = {
+        "/dev/input/event0": DummyDevice("/dev/input/event0", has_keys=False),
+        "/dev/input/event1": DummyDevice("/dev/input/event1", has_keys=True),
+    }
+
+    def build_device(path: str) -> DummyDevice:
+        return devices[path]
+
+    monkeypatch.setattr(runner, "InputDevice", build_device)
+
+    config = InputConfig(
+        mode="evdev",
+        device=None,
+        vendor_id=0x1234,
+        product_id=0x5678,
+        device_name_contains=None,
+        prefer_event_has_keys=("KEY_ENTER",),
+        grab=False,
+        reconnect_interval_seconds=0,
+    )
+
+    selected = runner._select_device_by_vid_pid(devices.keys(), config)
+
+    assert selected is devices["/dev/input/event1"]
+    assert devices["/dev/input/event0"].closed is True
+    assert devices["/dev/input/event1"].closed is False
+
+
+def test_select_device_by_vid_pid_prefers_name_hint(monkeypatch) -> None:
+    class DummyInfo:
+        def __init__(self, vendor: int, product: int) -> None:
+            self.vendor = vendor
+            self.product = product
+
+    class DummyDevice:
+        def __init__(self, path: str, name: str) -> None:
+            self.path = path
+            self.name = name
+            self.info = DummyInfo(0x1234, 0x5678)
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    devices = {
+        "/dev/input/event0": DummyDevice("/dev/input/event0", "Keyboard"),
+        "/dev/input/event1": DummyDevice("/dev/input/event1", "Scanner Device"),
+    }
+
+    def build_device(path: str) -> DummyDevice:
+        return devices[path]
+
+    monkeypatch.setattr(runner, "InputDevice", build_device)
+
+    config = InputConfig(
+        mode="evdev",
+        device=None,
+        vendor_id=0x1234,
+        product_id=0x5678,
+        device_name_contains="scanner",
+        prefer_event_has_keys=(),
+        grab=False,
+        reconnect_interval_seconds=0,
+    )
+
+    selected = runner._select_device_by_vid_pid(devices.keys(), config)
+
+    assert selected is devices["/dev/input/event1"]
+    assert devices["/dev/input/event0"].closed is True
+    assert devices["/dev/input/event1"].closed is False
 
 
 def test_open_serial_port_handles_serial_exception(monkeypatch) -> None:
@@ -305,6 +450,8 @@ def test_open_serial_port_handles_serial_exception(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -314,6 +461,7 @@ def test_open_serial_port_handles_serial_exception(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -340,6 +488,8 @@ def test_open_serial_port_handles_missing_device(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -349,6 +499,7 @@ def test_open_serial_port_handles_missing_device(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -381,6 +532,8 @@ def test_open_serial_port_passes_serial_settings(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -398,6 +551,7 @@ def test_open_serial_port_passes_serial_settings(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -434,6 +588,8 @@ def test_open_serial_port_passes_exclusive(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -443,6 +599,7 @@ def test_open_serial_port_passes_exclusive(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -477,6 +634,8 @@ def test_open_serial_port_emulates_modem_signals(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -486,6 +645,7 @@ def test_open_serial_port_emulates_modem_signals(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -522,6 +682,8 @@ def test_open_serial_port_sets_modem_signals(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -531,6 +693,7 @@ def test_open_serial_port_sets_modem_signals(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -573,6 +736,8 @@ def test_open_serial_port_closes_virtual_pty_on_error(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -582,6 +747,7 @@ def test_open_serial_port_closes_virtual_pty_on_error(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -607,6 +773,8 @@ def test_open_serial_port_rejects_exclusive_on_unsupported_env(monkeypatch) -> N
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -616,6 +784,7 @@ def test_open_serial_port_rejects_exclusive_on_unsupported_env(monkeypatch) -> N
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -843,6 +1012,8 @@ def test_run_event_loop_default_handles_read_loop_error(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -852,6 +1023,7 @@ def test_run_event_loop_default_handles_read_loop_error(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -889,6 +1061,8 @@ def test_run_event_loop_default_handles_read_error(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -898,6 +1072,7 @@ def test_run_event_loop_default_handles_read_error(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -960,6 +1135,8 @@ def test_run_event_loop_default_sends_on_enter(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -969,6 +1146,7 @@ def test_run_event_loop_default_sends_on_enter(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -1011,6 +1189,8 @@ def test_run_event_loop_retries_on_serial_error(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=1.5,
         ),
@@ -1020,6 +1200,7 @@ def test_run_event_loop_retries_on_serial_error(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
@@ -1046,6 +1227,8 @@ def test_run_event_loop_raises_when_reconnect_disabled(monkeypatch) -> None:
             device="/dev/input/event0",
             vendor_id=None,
             product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
             grab=False,
             reconnect_interval_seconds=0,
         ),
@@ -1055,6 +1238,7 @@ def test_run_event_loop_raises_when_reconnect_disabled(monkeypatch) -> None:
             encoding_errors="strict",
             line_end="\r\n",
             line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
             send_on_enter=True,
             send_mode="on_enter",
             idle_timeout_seconds=0.5,
