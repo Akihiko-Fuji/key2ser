@@ -461,7 +461,14 @@ def _open_serial_port(config: AppConfig) -> SerialPortHandle:
         if config.serial.exclusive is not None:
             serial_kwargs["exclusive"] = config.serial.exclusive
         port = serial.Serial(**serial_kwargs)
-        _apply_modem_signal_settings(port, config.serial)
+        try:
+            _apply_modem_signal_settings(port, config.serial)
+        except SerialConnectionError:
+            # モデム制御線の設定失敗時もハンドルを確実に開放する。
+            port.close()
+            if resources is not None:
+                resources.close()
+            raise        
         display_port = port_name
         if resources is not None:
             _log_virtual_pty(resources)
