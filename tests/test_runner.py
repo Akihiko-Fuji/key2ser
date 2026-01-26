@@ -955,9 +955,10 @@ def test_send_payload_with_timing_emulation(monkeypatch) -> None:
             self.writes: list[bytes] = []
             self.flushed = False
 
-        def write(self, data: bytes) -> None:
+        def write(self, data: bytes) -> int:
             self.writes.append(data)
-
+            return len(data)
+        
         def flush(self) -> None:
             self.flushed = True
 
@@ -980,6 +981,42 @@ def test_send_payload_with_timing_emulation(monkeypatch) -> None:
 
     assert port.writes == [b"a", b"b"]
     assert port.flushed is True
+
+
+def test_send_payload_with_timing_retries_short_write(monkeypatch) -> None:
+    class DummyPort:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+            self.calls = 0
+
+        def write(self, data: bytes) -> int:
+            self.calls += 1
+            if self.calls == 1:
+                return 0
+            self.writes.append(data)
+            return len(data)
+
+        def flush(self) -> None:
+            return None
+
+    port = DummyPort()
+    state = runner.BufferState()
+
+    monkeypatch.setattr(runner.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+
+    runner._send_payload_with_dedup(
+        port,
+        "a",
+        state=state,
+        send_mode="on_enter",
+        encoding="utf-8",
+        encoding_errors="strict",
+        dedup_window_seconds=0.0,
+        serial_config=replace(_default_serial_config(), emulate_timing=True),
+    )
+
+    assert port.writes == [b"a"]
 
 
 def test_encode_payload_handles_invalid_encoding() -> None:
