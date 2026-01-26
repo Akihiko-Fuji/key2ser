@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from key2ser.config import load_config
+from key2ser.config import (
+    load_config,
+    DEFAULT_PREFERRED_INPUT_KEYS,
+    DEFAULT_TERMINATOR_KEYS,
+)
+
 
 
 def test_load_config_parses_hex_vid_pid(tmp_path: Path) -> None:
@@ -29,6 +34,8 @@ line_end=\r\n
 
     assert config.input.vendor_id == 0x1234
     assert config.input.product_id == 0xABCD
+    assert config.input.device_name_contains is None
+    assert config.input.prefer_event_has_keys == DEFAULT_PREFERRED_INPUT_KEYS
     assert config.input.reconnect_interval_seconds == 3.0
     assert config.serial.port == "/dev/ttyV0"
     assert config.serial.bytesize == 8
@@ -44,6 +51,7 @@ line_end=\r\n
     assert config.serial.pty_mode is None
     assert config.serial.pty_group is None
     assert config.output.encoding_errors == "strict"
+    assert config.output.terminator_keys == DEFAULT_TERMINATOR_KEYS
     assert config.output.dedup_window_seconds == 0.2
 
 
@@ -94,6 +102,8 @@ def test_load_config_parses_serial_settings(tmp_path: Path) -> None:
         """
 [input]
 mode=evdev
+device_name_contains=Scanner
+prefer_event_has_keys=KEY_A, KEY_B
 
 [serial]
 port=/dev/ttyV0
@@ -138,7 +148,28 @@ line_end=\r\n
     assert config.serial.pty_mode == 0o660
     assert config.serial.pty_group == "dialout"
     assert config.output.encoding_errors == "replace"
+    assert config.input.device_name_contains == "Scanner"
+    assert config.input.prefer_event_has_keys == ("KEY_A", "KEY_B")
 
+
+def test_load_config_parses_terminator_keys(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+
+[output]
+terminator_keys=KEY_ENTER, KEY_KPENTER
+""".strip()
+    )
+
+    config = load_config(config_file)
+
+    assert config.output.terminator_keys == ("KEY_ENTER", "KEY_KPENTER")
 
 def test_load_config_rejects_negative_dedup_window(tmp_path: Path) -> None:
     config_file = tmp_path / "config.ini"
