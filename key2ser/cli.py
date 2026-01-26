@@ -70,26 +70,25 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
         runner.run_event_loop(config)
-    except FileNotFoundError as exc:
-        logging.error("%s", exc)
-        return 2
-    except runner.DeviceNotFoundError as exc:
-        logging.error("%s", exc)
-        return 3
-    except runner.DeviceAccessError as exc:
-        logging.error("%s", exc)
-        return 3
-    except runner.SerialConnectionError as exc:
-        logging.error("%s", exc)
-        return 5    
-    except ValueError as exc:
-        logging.error("%s", exc)
-        return 4
+
     except KeyboardInterrupt:
         logging.info("終了します。")
         return 0
     return 0
 
+    except Exception as exc:
+        error_exit_codes = {
+            FileNotFoundError: 2,
+            runner.DeviceNotFoundError: 3,
+            runner.DeviceAccessError: 3,
+            runner.SerialConnectionError: 5,
+            ValueError: 4,
+        }
+        for error_type, exit_code in error_exit_codes.items():
+            if isinstance(exc, error_type):
+                logging.error("%s", exc)
+                return exit_code
+        raise
 
 if __name__ == "__main__":
     raise SystemExit(main())
