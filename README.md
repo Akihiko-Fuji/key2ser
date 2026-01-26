@@ -59,7 +59,7 @@ sudo socat -d -d pty,raw,echo=0,link=/dev/ttyV0,mode=660,group=dialout \
 
 送信側が `/dev/ttyV0`、受信側が `/dev/ttyV1` になります。
 
-`serial.port=auto` を指定すると、起動時に仮想TTYペアを作成し、ログに受信側ポートを表示します。安定したパスが必要な場合は `pty_link` を併用してください。
+`serial.port=auto` を指定すると、起動時に仮想TTYペアを作成し、ログに受信側ポートを表示します。安定したパスが必要な場合は `pty_link` を併用してください（`/run/key2ser/ttyV0` など）。非root運用であれば `/dev` 直下より `/run` 配下の利用が安定します。
 
 #### これまでの流れ（仮想TTY作成〜実行）
 
@@ -105,13 +105,15 @@ mode=evdev
 # device=/dev/input/event3
 vendor_id=0x1234
 product_id=0xabcd
+# device_name_contains=Scanner
+# prefer_event_has_keys=KEY_ENTER,KEY_KPENTER,KEY_0,KEY_1,KEY_2,KEY_3,KEY_4,KEY_5,KEY_6,KEY_7,KEY_8,KEY_9
 # grab=true
 reconnect_interval_seconds=3
 
 [serial]
 port=/dev/ttyV0
 # port=auto
-# pty_link=/dev/ttyV0
+# pty_link=/run/key2ser/ttyV0
 # pty_mode=660
 # pty_group=dialout
 baudrate=9600
@@ -134,6 +136,7 @@ encoding=utf-8
 encoding_errors=strict
 line_end_mode=escape
 line_end=\r\n
+terminator_keys=KEY_ENTER,KEY_KPENTER
 send_on_enter=true
 send_mode=on_enter
 idle_timeout_seconds=0.5
@@ -142,6 +145,10 @@ dedup_window_seconds=0.2
 
 - `vendor_id` と `product_id` を両方指定すると該当デバイスのみを使用します。
 - `device` を指定すると特定の `/dev/input/event*` を優先します。
+- Bluetooth 機器などで `event*` が複数見える場合は、`/dev/input/by-id/...` を `device` に指定すると安定します（イベント番号変動の影響を受けません）。
+- VID/PID が複数一致した場合は、`prefer_event_has_keys` / `device_name_contains` の条件で自動選別を試みます（差がない場合はエラーになります）。
+- `device_name_contains` は `device.name` / `device.phys` / `device.uniq` に含まれる文字列で候補を優先します。
+- `prefer_event_has_keys` は EV_KEY に含まれるキーを指定し、該当キーを持つデバイスを優先します。
 - `reconnect_interval_seconds` は入力デバイスやシリアルの読み取りに失敗した際に再接続を試みる間隔（秒）です。0 にすると再試行しません。
 - `bytesize` はデータビット長（5/6/7/8）を指定します。
 - `parity` はパリティビット（none/odd/even/mark/space）を指定します。
@@ -155,7 +162,7 @@ dedup_window_seconds=0.2
 - `dtr`/`rts` はモデム制御線を明示的にON/OFFします（`true`/`false`）。
 - `emulate_timing` は仮想TTYで実際の通信速度が再現されない場合に、設定された通信パラメータに合わせて送信間隔を調整します。
 - `port=auto` を指定すると、内部で仮想TTYペアを生成します。
-- `pty_link` は外部アプリ向けの仮想TTYへのシンボリックリンクを作成します。
+- `pty_link` は外部アプリ向けの仮想TTYへのシンボリックリンクを作成します（非root運用では `/run/key2ser/ttyV0` などを推奨）。
 - `pty_mode` は `pty_link` のパーミッションを8進数で指定します。
 - `pty_group` は `pty_link` のグループを指定します。
 - `send_mode` は送信タイミングを指定します。
@@ -165,6 +172,7 @@ dedup_window_seconds=0.2
 - `line_end_mode` は `line_end` の解釈方法を指定します。
   - `literal`: そのまま送信します。
   - `escape`: `\r` や `\n` といったエスケープシーケンスを実際の改行として解釈します。
+- `terminator_keys` は `send_mode=on_enter` の終端キーを指定します（`,` 区切り）。
 - `encoding_errors` はエンコーディング変換に失敗した場合の挙動を指定します（`strict`/`replace`/`ignore`/`backslashreplace`/`xmlcharrefreplace`/`namereplace`）。
 - `send_on_enter` は `send_mode=on_enter` のときのみ有効で、Enter のみが入力された場合でも空文字を送信するかどうかを指定します。
 - `idle_timeout_seconds` は `send_mode=idle_timeout` のときに使用する待機時間（秒）です。
@@ -191,10 +199,13 @@ After=network.target
 [Service]
 Type=simple
 User=pi
-Group=input
+Group=pi
+SupplementaryGroups=input dialout
+RuntimeDirectory=key2ser
 WorkingDirectory=/path/to/key2ser
 ExecStart=/path/to/key2ser/.venv/bin/python /path/to/key2ser/key2ser.py --config /path/to/key2ser/config.ini
 Restart=on-failure
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
