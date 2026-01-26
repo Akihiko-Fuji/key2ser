@@ -152,6 +152,32 @@ line_end=\r\n
     assert config.input.prefer_event_has_keys == ("KEY_A", "KEY_B")
 
 
+def test_load_config_allows_empty_optional_bools(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+exclusive=
+dtr=
+rts=
+
+[output]
+encoding=utf-8
+line_end=\r\n
+""".strip()
+    )
+
+    config = load_config(config_file)
+
+    assert config.serial.exclusive is None
+    assert config.serial.dtr is None
+    assert config.serial.rts is None
+
+
 def test_load_config_parses_terminator_keys(tmp_path: Path) -> None:
     config_file = tmp_path / "config.ini"
     config_file.write_text(
