@@ -70,11 +70,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
         runner.run_event_loop(config)
+        return 0
 
     except KeyboardInterrupt:
         logging.info("終了します。")
         return 0
-    return 0
+
 
     except Exception as exc:
         error_exit_codes = {
