@@ -245,6 +245,8 @@ def load_config(path: Path) -> AppConfig:
     device = parser.get("input", "device", fallback="").strip() or None
     vendor_id = _parse_optional_int(parser.get("input", "vendor_id", fallback=None), field_name="vendor_id")
     product_id = _parse_optional_int(parser.get("input", "product_id", fallback=None), field_name="product_id")
+    if (vendor_id is None) ^ (product_id is None):
+        raise ValueError("input.vendor_id と input.product_id は両方指定してください。")
     device_name_contains = parser.get("input", "device_name_contains", fallback="").strip() or None
     prefer_event_has_keys = _parse_key_list(
         parser.get("input", "prefer_event_has_keys", fallback=None),
