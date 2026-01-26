@@ -34,8 +34,16 @@ line_end=\r\n
     assert config.serial.bytesize == 8
     assert config.serial.parity == "N"
     assert config.serial.stopbits == 1.0
+    assert config.serial.write_timeout is None
     assert config.serial.emulate_modem_signals is False
+    assert config.serial.exclusive is None
+    assert config.serial.dtr is None
+    assert config.serial.rts is None
     assert config.serial.emulate_timing is False
+    assert config.serial.pty_link is None
+    assert config.serial.pty_mode is None
+    assert config.serial.pty_group is None
+    assert config.output.encoding_errors == "strict"
     assert config.output.dedup_window_seconds == 0.2
 
 
@@ -95,11 +103,19 @@ stopbits=2
 xonxoff=true
 rtscts=true
 dsrdtr=true
+exclusive=true
 emulate_modem_signals=true
+write_timeout=0.2
+dtr=false
+rts=true
+pty_link=/dev/ttyV1
+pty_mode=660
+pty_group=dialout
 emulate_timing=true
 
 [output]
 encoding=utf-8
+encoding_errors=replace
 line_end=\r\n
 """.strip()
     )
@@ -109,11 +125,19 @@ line_end=\r\n
     assert config.serial.bytesize == 7
     assert config.serial.parity == "E"
     assert config.serial.stopbits == 2.0
+    assert config.serial.write_timeout == 0.2
     assert config.serial.xonxoff is True
     assert config.serial.rtscts is True
     assert config.serial.dsrdtr is True
     assert config.serial.emulate_modem_signals is True
+    assert config.serial.exclusive is True
+    assert config.serial.dtr is False
+    assert config.serial.rts is True
     assert config.serial.emulate_timing is True
+    assert config.serial.pty_link == "/dev/ttyV1"
+    assert config.serial.pty_mode == 0o660
+    assert config.serial.pty_group == "dialout"
+    assert config.output.encoding_errors == "replace"
 
 
 def test_load_config_rejects_negative_dedup_window(tmp_path: Path) -> None:
@@ -132,6 +156,46 @@ dedup_window_seconds=-1
     )
 
     with pytest.raises(ValueError, match="output.dedup_window_seconds は 0 以上の値を指定してください。"):
+        load_config(config_file)
+
+
+def test_load_config_rejects_invalid_encoding_errors(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+
+[output]
+encoding_errors=unknown
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="output.encoding_errors は strict/replace/ignore"):
+        load_config(config_file)
+
+
+def test_load_config_rejects_negative_write_timeout(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+write_timeout=-1
+
+[output]
+encoding=utf-8
+line_end=\\r\\n
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="serial.write_timeout は 0 以上の値を指定してください。"):
         load_config(config_file)
 
 
