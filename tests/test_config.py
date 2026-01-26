@@ -236,6 +236,25 @@ encoding_errors=unknown
         load_config(config_file)
 
 
+def test_load_config_rejects_invalid_encoding(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+
+[serial]
+port=/dev/ttyV0
+
+[output]
+encoding=unknown-encoding
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="output.encoding に未対応の文字コードが指定されています。"):
+        load_config(config_file)
+
+
 def test_load_config_rejects_negative_write_timeout(tmp_path: Path) -> None:
     config_file = tmp_path / "config.ini"
     config_file.write_text(
