@@ -13,6 +13,8 @@ class InputConfig:
     device: Optional[str]
     vendor_id: Optional[int]
     product_id: Optional[int]
+    device_name_contains: Optional[str]
+    prefer_event_has_keys: tuple[str, ...]
     grab: bool
     reconnect_interval_seconds: float
     
@@ -44,6 +46,7 @@ class OutputConfig:
     encoding_errors: str
     line_end: str
     line_end_mode: str
+    terminator_keys: tuple[str, ...]
     send_on_enter: bool
     send_mode: str
     idle_timeout_seconds: float
@@ -58,7 +61,12 @@ class AppConfig:
 
 
 DEFAULT_CONFIG_PATH = Path("config.ini")
-
+DEFAULT_PREFERRED_INPUT_KEYS = (
+    "KEY_ENTER",
+    "KEY_KPENTER",
+    *tuple(f"KEY_{digit}" for digit in range(10)),
+)
+DEFAULT_TERMINATOR_KEYS = ("KEY_ENTER", "KEY_KPENTER")
 
 # 任意指定の数値項目をintに変換する。
 def _parse_optional_int(value: Optional[str], *, field_name: str) -> Optional[int]:
@@ -172,6 +180,17 @@ def _parse_line_end(line_end: str, *, line_end_mode: str) -> str:
     except UnicodeDecodeError as exc:
         raise ValueError("output.line_end に無効なエスケープシーケンスがあります。") from exc
 
+# カンマ区切りのキー一覧をパースする。
+def _parse_key_list(value: Optional[str], *, default: Optional[tuple[str, ...]]) -> tuple[str, ...]:
+    """キーコードのリスト設定を正規化して返す。"""
+    if value is None:
+        return default or tuple()
+    stripped = value.strip()
+    if not stripped:
+        return tuple()
+    keys = [item.strip().upper() for item in stripped.split(",") if item.strip()]
+    return tuple(keys)
+
 
 # 設定ファイルを読み込んでアプリ設定に変換する。
 def load_config(path: Path) -> AppConfig:
@@ -196,6 +215,11 @@ def load_config(path: Path) -> AppConfig:
     device = parser.get("input", "device", fallback="").strip() or None
     vendor_id = _parse_optional_int(parser.get("input", "vendor_id", fallback=None), field_name="vendor_id")
     product_id = _parse_optional_int(parser.get("input", "product_id", fallback=None), field_name="product_id")
+    device_name_contains = parser.get("input", "device_name_contains", fallback="").strip() or None
+    prefer_event_has_keys = _parse_key_list(
+        parser.get("input", "prefer_event_has_keys", fallback=None),
+        default=DEFAULT_PREFERRED_INPUT_KEYS,
+    )
     grab = _get_bool(parser, "input", "grab", False)
     reconnect_interval_seconds = parser.getfloat("input", "reconnect_interval_seconds", fallback=3.0)
     if reconnect_interval_seconds < 0:
@@ -246,6 +270,10 @@ def load_config(path: Path) -> AppConfig:
         raise ValueError("output.line_end_mode は literal / escape のいずれかを指定してください。")
     line_end = parser.get("output", "line_end", fallback="\r\n")
     line_end = _parse_line_end(line_end, line_end_mode=line_end_mode)
+    terminator_keys = _parse_key_list(
+        parser.get("output", "terminator_keys", fallback=None),
+        default=DEFAULT_TERMINATOR_KEYS,
+    )
     send_on_enter = _get_bool(parser, "output", "send_on_enter", True)
     send_mode = parser.get("output", "send_mode", fallback="on_enter").strip().lower() or "on_enter"
     if send_mode not in {"on_enter", "per_char", "idle_timeout"}:
@@ -263,6 +291,8 @@ def load_config(path: Path) -> AppConfig:
             device=device,
             vendor_id=vendor_id,
             product_id=product_id,
+            device_name_contains=device_name_contains,
+            prefer_event_has_keys=prefer_event_has_keys,
             grab=grab,
             reconnect_interval_seconds=reconnect_interval_seconds,
         ),
@@ -291,6 +321,7 @@ def load_config(path: Path) -> AppConfig:
             encoding_errors=encoding_errors,
             line_end=line_end,
             line_end_mode=line_end_mode,
+            terminator_keys=terminator_keys,
             send_on_enter=send_on_enter,
             send_mode=send_mode,
             idle_timeout_seconds=idle_timeout_seconds,
