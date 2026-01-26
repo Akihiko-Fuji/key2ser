@@ -1,4 +1,5 @@
 import configparser
+import logging
 from pathlib import Path
 
 import pytest
@@ -380,3 +381,29 @@ def test_load_config_handles_os_error(monkeypatch, tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="config.ini の読み取りに失敗しました。"):
         load_config(config_file)
+
+
+def test_load_config_warns_on_unknown_key_names(caplog, tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+prefer_event_has_keys=KEY_A, KEY_BOGUS
+
+[serial]
+port=/dev/ttyV0
+
+[output]
+terminator_keys=KEY_ENTER, KEY_BAD
+""".strip()
+    )
+
+    caplog.set_level(logging.WARNING)
+
+    load_config(config_file)
+
+    assert "input.prefer_event_has_keys に未対応のキーが含まれています" in caplog.text
+    assert "KEY_BOGUS" in caplog.text
+    assert "output.terminator_keys に未対応のキーが含まれています" in caplog.text
+    assert "KEY_BAD" in caplog.text
