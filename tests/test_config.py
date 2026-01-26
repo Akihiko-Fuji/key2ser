@@ -56,6 +56,26 @@ line_end=\r\n
     assert config.output.dedup_window_seconds == 0.2
 
 
+def test_load_config_rejects_unsupported_mode(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=foo
+
+[serial]
+port=/dev/ttyV0
+
+[output]
+encoding=utf-8
+line_end=\r\n
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="input.mode は evdev のみサポートしています。"):
+        load_config(config_file)
+
+
 def test_load_config_requires_serial_port(tmp_path: Path) -> None:
     config_file = tmp_path / "config.ini"
     config_file.write_text(
