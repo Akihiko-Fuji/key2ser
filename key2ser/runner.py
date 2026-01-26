@@ -221,6 +221,10 @@ def _select_single_device(matches: list[InputDevice], config: InputConfig) -> Op
     scored = [(device, _score_device(device, config)) for device in matches]
     scored.sort(key=lambda item: item[1], reverse=True)
     best_device, best_score = scored[0]
+    if logger.isEnabledFor(logging.DEBUG):
+        # スコアリング結果をログに残すことで選別不能時の判断材料を確保する。
+        summaries = ", ".join(f"{device.path}:{score}" for device, score in scored)
+        logger.debug("入力デバイス候補のスコア: %s", summaries)
     if best_score > 0 and scored[1][1] < best_score:
         for device, _score in scored:
             if device is not best_device:
@@ -228,6 +232,8 @@ def _select_single_device(matches: list[InputDevice], config: InputConfig) -> Op
         # 似たHIDが複数あると誤送信の恐れがあるため、有意差がある場合のみ自動選別する。
         logger.info("入力デバイスを自動選別しました: %s", best_device.path)
         return best_device
+    if best_score > 0:
+        logger.info("入力デバイスの候補が複数あり自動選別できませんでした。")
     return None
 
 
@@ -332,7 +338,14 @@ def _send_payload_with_timing(
     next_time = time.monotonic()
     try:
         for byte in data:
-            port.write(bytes([byte]))
+            # 短い書き込みが返る可能性があるため、少数回リトライして確実に送信する。
+            for attempt in range(3):
+                written = port.write(bytes([byte]))
+                if written == 1:
+                    break
+                if written in (0, None) and attempt < 2:
+                    continue
+                raise SerialConnectionError("シリアルへの送信に失敗しました。")
             next_time += frame_seconds
             sleep_seconds = next_time - time.monotonic()
             if sleep_seconds > 0:
