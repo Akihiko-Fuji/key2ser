@@ -242,6 +242,8 @@ def load_config(path: Path) -> AppConfig:
 
     # 入力デバイスの指定は名前優先だがVID/PIDにも対応する。
     mode = parser.get("input", "mode", fallback="evdev").strip()
+    if mode != "evdev":
+        raise ValueError("input.mode は evdev のみサポートしています。")
     device = parser.get("input", "device", fallback="").strip() or None
     vendor_id = _parse_optional_int(parser.get("input", "vendor_id", fallback=None), field_name="vendor_id")
     product_id = _parse_optional_int(parser.get("input", "product_id", fallback=None), field_name="product_id")
