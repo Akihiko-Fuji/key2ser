@@ -76,6 +76,48 @@ line_end=\r\n
         load_config(config_file)
 
 
+def test_load_config_rejects_partial_vid_pid(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+vendor_id=0x1234
+
+[serial]
+port=/dev/ttyV0
+
+[output]
+encoding=utf-8
+line_end=\r\n
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="input.vendor_id と input.product_id は両方指定してください。"):
+        load_config(config_file)
+
+
+def test_load_config_rejects_partial_product_id(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        """
+[input]
+mode=evdev
+product_id=0xabcd
+
+[serial]
+port=/dev/ttyV0
+
+[output]
+encoding=utf-8
+line_end=\r\n
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="input.vendor_id と input.product_id は両方指定してください。"):
+        load_config(config_file)
+
+
 def test_load_config_supports_line_end_escape(tmp_path: Path) -> None:
     config_file = tmp_path / "config.ini"
     config_file.write_text(
