@@ -159,13 +159,17 @@ def _log_available_devices() -> None:
         except OSError as exc:
             logger.warning("入力デバイスの取得に失敗しました: %s (%s)", path, exc)
             continue
-        logger.info(
-            "- %s (VID=0x%04X PID=0x%04X 名称=%s)",
-            device.path,
-            device.info.vendor,
-            device.info.product,
-            device.name,
-        )
+        try:
+            logger.info(
+                "- %s (VID=0x%04X PID=0x%04X 名称=%s)",
+                device.path,
+                device.info.vendor,
+                device.info.product,
+                device.name,
+            )
+        finally:
+            # デバイス列挙時もFDリークを避けるため明示的にクローズする。
+            _close_input_device(device)
 
 
 # VID/PIDで一致する入力デバイスを1つ選択する。
@@ -183,6 +187,9 @@ def _select_device_by_vid_pid(devices: Iterable[str], vendor_id: int, product_id
             continue
         if _match_device_info(device, vendor_id=vendor_id, product_id=product_id):
             matches.append(device)
+        else:
+            # 非一致のデバイスは保持しないためクローズする。
+            _close_input_device(device)
     if not matches:
         # デバイス一覧の取得はできても個別アクセスに失敗した場合は別エラーにする。
         if access_error:
@@ -190,6 +197,8 @@ def _select_device_by_vid_pid(devices: Iterable[str], vendor_id: int, product_id
         raise DeviceNotFoundError("指定されたVID/PIDに一致する入力デバイスが見つかりません。")
     if len(matches) > 1:
         # 複数ヒットは誤送信を避けるため明示指定を促す。
+        for device in matches:
+            _close_input_device(device)
         raise DeviceNotFoundError("VID/PIDが一致するデバイスが複数あります。deviceを指定してください。")
     return matches[0]
 
