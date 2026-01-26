@@ -9,6 +9,84 @@ Raspberry Pi OS で HID デバイス（バーコードリーダーなど）を�
 さらに、DTR/RTS のモデム制御線エミュレーションや、**通信速度の疑似再現**（送信間隔制御）も用意されており、一定範囲で「実際のシリアルに近い振る舞い」を再現できます。
 100%の再現は無いので、厳格な処理をおこなっている場合には、正常に動作しない場合があります。
 
+## できること / できないこと
+
+### できること
+- HID入力（バーコードリーダーなど）を仮想シリアルポートへ転送
+- VID/PID やデバイス名で入力デバイスを限定
+- 送信タイミング（Enter 受信/1文字ごと/アイドル時間）を選択
+- DTR/RTS などのモデム制御線エミュレーション
+- 実際の通信速度に近づける送信間隔制御（疑似再現）
+
+### できないこと
+- Windows/macOS での動作（Linux の evdev を前提）
+- 物理シリアルと完全一致の挙動（完全再現ではない）
+- HID 以外の入力方式
+
+## こんなときに使う
+
+- Bluetooth で HID 接続されるバーコードリーダーを、シリアル機器のように扱いたい
+- 既存のシリアル対応アプリを改修せずに入力を受けたい
+- テスト環境で擬似的にシリアル入力を生成したい
+
+## クイックスタート
+
+### 1. インストール
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2. 入力デバイスの特定
+
+以下のいずれかでデバイス候補を確認します。
+
+```bash
+ls /dev/input/by-id/
+```
+
+または
+
+```bash
+sudo libinput list-devices
+```
+
+### 3. 設定ファイルを編集
+
+最小構成の例です（HID入力を `/dev/ttyV0` に送信）。
+
+```ini
+[input]
+mode=evdev
+device=/dev/input/event3
+
+[serial]
+port=/dev/ttyV0
+
+[output]
+send_mode=on_enter
+terminator_keys=KEY_ENTER,KEY_KPENTER
+line_end=\r\n
+line_end_mode=escape
+```
+
+### 4. 起動
+
+```bash
+python3 key2ser.py --config config.ini
+```
+
+## 動作の流れ
+
+1. evdev で入力デバイスを選別（VID/PIDや名前条件）
+2. キー入力を文字列へ変換（英数/かなのマッピング）
+3. 送信モードに応じてバッファを構築
+4. 仮想TTYへ書き込み
+5. 必要に応じて DTR/RTS や送信間隔を制御
+
+
 ## モジュール構成
 
 - `key2ser/__init__.py`: パッケージの公開モジュールを定義します。
@@ -32,12 +110,7 @@ Bluetoothのシリアル通信 (SPP) デバイスを使用する際、現行のB
 主な用途として、1次元・2次元バーコードリーダーでの利用を想定しています。機器のレジュームでデバイスが失われた後に、復帰処理を追加しました。
 
 ## セットアップ
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+クイックスタートの手順と同じです。
 
 ## GitHub からのインストール
 
@@ -179,6 +252,26 @@ dedup_window_seconds=0.2
 - `dedup_window_seconds` は直近の送信と同じ内容が連続した場合に抑止する時間（秒）です。0 を指定すると抑止しません。
 - `mode=evdev` は、Linux の evdev（`/dev/input/event*`）経由で入力イベントを読む方式を指定しています。値は evdev を前提にしており、現時点で他の値を想定していません。
 - `exclusive=false` の場合は共有オープンになりますが、複数プロセスからの同時書き込みに対する順序保証はありません。
+
+## よくあるトラブルと対処
+
+### 入力が取れない
+- `input` グループに所属しているか確認してください。
+  - `groups <user>` で確認、なければ `sudo usermod -aG input <user>`
+- `device=/dev/input/event*` が正しいか確認してください。
+  - `sudo libinput list-devices` で対象デバイスの event 番号を確認できます。
+
+### デバイスが複数一致して選べない
+- `device_name_contains` や `prefer_event_has_keys` を設定して絞り込んでください。
+- `device` に `/dev/input/by-id/...` を指定すると安定します。
+
+### シリアル側に書き込みできない
+- `dialout` グループに所属しているか確認してください。
+- `port=auto` を使っている場合はログに表示される受信側ポートを確認してください。
+
+### 改行が期待と違う
+- `line_end_mode=escape` と `line_end=\r\n` を併用してください。
+- 既存シリアル機器が `\r` のみを期待する場合は `line_end=\r` を試してください。
 
 ## 実行方法
 
