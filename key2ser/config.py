@@ -105,6 +105,12 @@ def _parse_optional_bool(
     """指定されていない場合はNoneを返す。"""
     if not parser.has_option(section, option):
         return None
+    value = parser.get(section, option, fallback=None)
+    if value is None:
+        return None
+    # 空文字は未指定として扱い、既存の設定ファイルの落とし穴を回避する。
+    if not value.strip():
+        return None
     return parser.getboolean(section, option)
 
 
