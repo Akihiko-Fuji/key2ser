@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import codecs
 import configparser
 import logging
 from pathlib import Path
@@ -282,6 +283,10 @@ def load_config(path: Path) -> AppConfig:
    
     # 送信方式に応じて改行や送信トリガーを決める。
     encoding = parser.get("output", "encoding", fallback="utf-8").strip()
+    try:
+        codecs.lookup(encoding)
+    except LookupError as exc:
+        raise ValueError("output.encoding に未対応の文字コードが指定されています。") from exc
     encoding_errors = parser.get("output", "encoding_errors", fallback="strict").strip().lower() or "strict"
     valid_encoding_errors = {
         "strict",
