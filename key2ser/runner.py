@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import errno
+import grp
 import logging
+import os
 from pathlib import Path
+import pty
 import select
+import threading
 import time
+import tty
 from typing import Iterable, Optional, Set
 
 from evdev import InputDevice, categorize, ecodes, list_devices
@@ -36,6 +41,10 @@ class DeviceNotFoundError(RuntimeError):
     pass
 
 
+class PayloadEncodeError(RuntimeError):
+    pass
+
+
 # 入力デバイスのVID/PID一致を判定する。
 def _match_device_info(device: InputDevice, *, vendor_id: int, product_id: int) -> bool:
     """InputDeviceの情報が指定VID/PIDと一致するか判定する。"""
@@ -47,6 +56,116 @@ class DeviceAccessError(RuntimeError):
 
 class SerialConnectionError(RuntimeError):
     pass
+
+@dataclass
+class VirtualPtyResources:
+    bridge: "VirtualPtyBridge"
+    symlink_path: Optional[Path]
+    created_symlink: bool
+    app_slave: str
+    peer_slave: str
+
+    def close(self) -> None:
+        """生成したPTYリソースを開放する。"""
+        self.bridge.close()
+        if self.created_symlink and self.symlink_path is not None:
+            try:
+                self.symlink_path.unlink()
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                logger.warning("シンボリックリンクの削除に失敗しました: %s", exc)
+
+
+@dataclass
+class SerialPortHandle:
+    port: serial.Serial
+    display_port: str
+    resources: Optional[VirtualPtyResources] = None
+
+    def __enter__(self) -> "SerialPortHandle":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if self.resources is not None:
+            self.resources.close()
+        self.port.close()
+        return False
+
+    def __getattr__(self, name: str):
+        return getattr(self.port, name)
+
+
+class VirtualPtyBridge:
+    def __init__(self, master_a: int, master_b: int) -> None:
+        self._master_a = master_a
+        self._master_b = master_b
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop_event.set()
+        for fd in (self._master_a, self._master_b):
+            try:
+                os.close(fd)
+            except OSError:
+                continue
+        self._thread.join(timeout=1.0)
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                readable, _, _ = select.select([self._master_a, self._master_b], [], [], 0.5)
+            except OSError as exc:
+                if self._stop_event.is_set():
+                    return
+                logger.warning("仮想TTYのブリッジ監視に失敗しました: %s", exc)
+                continue
+            for fd in readable:
+                try:
+                    data = os.read(fd, 1024)
+                except OSError as exc:
+                    if not self._stop_event.is_set():
+                        logger.warning("仮想TTYの読み取りに失敗しました: %s", exc)
+                    continue
+                if not data:
+                    continue
+                target = self._master_b if fd == self._master_a else self._master_a
+                try:
+                    os.write(target, data)
+                except OSError as exc:
+                    if not self._stop_event.is_set():
+                        logger.warning("仮想TTYの書き込みに失敗しました: %s", exc)
+
+
+# 起動時に利用可能な入力デバイスを列挙する。
+def _log_available_devices() -> None:
+    """接続済みの入力デバイスをログに出力する。"""
+    try:
+        devices = list_devices()
+    except OSError as exc:
+        logger.warning("入力デバイス一覧の取得に失敗しました: %s", exc)
+        return
+    if not devices:
+        logger.info("入力デバイスが見つかりませんでした。")
+        return
+    logger.info("検出された入力デバイス:")
+    for path in devices:
+        try:
+            device = InputDevice(path)
+        except OSError as exc:
+            logger.warning("入力デバイスの取得に失敗しました: %s (%s)", path, exc)
+            continue
+        logger.info(
+            "- %s (VID=0x%04X PID=0x%04X 名称=%s)",
+            device.path,
+            device.info.vendor,
+            device.info.product,
+            device.name,
+        )
 
 
 # VID/PIDで一致する入力デバイスを1つ選択する。
@@ -101,13 +220,12 @@ def open_input_device(config: InputConfig) -> InputDevice:
 
 
 # 送信前の文字列を指定エンコーディングでバイト化する。
-def _encode_payload(payload: str, encoding: str) -> bytes:
+def _encode_payload(payload: str, encoding: str, *, errors: str) -> bytes:
     """出力文字列をエンコードし、失敗時はValueErrorに変換する。"""
     try:
-        return payload.encode(encoding)
+        return payload.encode(encoding, errors=errors)
     except UnicodeEncodeError as exc:
-        raise ValueError("指定されたエンコーディングで変換できない文字が含まれています。") from exc
-
+        raise PayloadEncodeError("指定されたエンコーディングで変換できない文字が含まれています。") from exc
     except LookupError as exc:
         raise ValueError("output.encoding に未対応の文字コードが指定されています。") from exc
 
@@ -125,15 +243,20 @@ def _send_payload_with_timing(
     payload: str,
     *,
     encoding: str,
+    encoding_errors: str,
     serial_config: SerialConfig,
 ) -> None:
     """シリアルの通信速度に合わせて1バイトずつ送信する。"""
-    data = _encode_payload(payload, encoding)
+    try:
+        data = _encode_payload(payload, encoding, errors=encoding_errors)
+    except PayloadEncodeError as exc:
+        logger.warning("%s", exc)
+        return
     if not data:
         return
     frame_seconds = _calculate_frame_seconds(serial_config)
     if frame_seconds <= 0:
-        _send_payload(port, payload, encoding)
+        _send_payload(port, payload, encoding, encoding_errors=encoding_errors)
         return
     # 仮想TTYは通信速度の制約がないため、実機に近づける目的で送信間隔を制御する。
     next_time = time.monotonic()
@@ -145,18 +268,22 @@ def _send_payload_with_timing(
             if sleep_seconds > 0:
                 time.sleep(sleep_seconds)
         port.flush()
-    except (serial.SerialException, OSError) as exc:
+    except (serial.SerialException, OSError, getattr(serial, "SerialTimeoutException", serial.SerialException)) as exc:
         raise SerialConnectionError("シリアルへの送信に失敗しました。") from exc
 
 
 # シリアルへデータを送信する。
-def _send_payload(port: serial.Serial, payload: str, encoding: str) -> None:
+def _send_payload(port: serial.Serial, payload: str, encoding: str, *, encoding_errors: str) -> None:
     """シリアルポートにペイロードを書き込み送信する。"""
-    data = _encode_payload(payload, encoding)
+    try:
+        data = _encode_payload(payload, encoding, errors=encoding_errors)
+    except PayloadEncodeError as exc:
+        logger.warning("%s", exc)
+        return
     try:
         port.write(data)
         port.flush()
-    except (serial.SerialException, OSError) as exc:
+    except (serial.SerialException, OSError, getattr(serial, "SerialTimeoutException", serial.SerialException)) as exc:
         raise SerialConnectionError("シリアルへの送信に失敗しました。") from exc
 
 # 直近の送信と重複する場合に抑止するか判定
@@ -185,6 +312,7 @@ def _send_payload_with_dedup(
     state: BufferState,
     send_mode: str,
     encoding: str,
+    encoding_errors: str,
     dedup_window_seconds: float,
     serial_config: SerialConfig,
 ) -> None:
@@ -200,9 +328,15 @@ def _send_payload_with_dedup(
             # バーコードリーダーの二重送信を抑止するため、短時間の同一ペイロードは無視する。
             return
     if serial_config.emulate_timing:
-        _send_payload_with_timing(port, payload, encoding=encoding, serial_config=serial_config)
+        _send_payload_with_timing(
+            port,
+            payload,
+            encoding=encoding,
+            encoding_errors=encoding_errors,
+            serial_config=serial_config,
+        )
     else:
-        _send_payload(port, payload, encoding)
+        _send_payload(port, payload, encoding, encoding_errors=encoding_errors)
     state.last_sent_payload = payload
     state.last_sent_time = now
 
@@ -221,29 +355,45 @@ def _iter_keycodes(key_event) -> Iterable[str]:
 
 
 # シリアルポートを開く。
-def _open_serial_port(config: AppConfig) -> serial.Serial:
+def _open_serial_port(config: AppConfig) -> SerialPortHandle:
     """設定に従ってシリアルポートを開き例外を変換する。"""
+    resources: Optional[VirtualPtyResources] = None
     try:
-        port = serial.Serial(
-            port=config.serial.port,
-            baudrate=config.serial.baudrate,
-            timeout=config.serial.timeout,
-            bytesize=config.serial.bytesize,
-            parity=config.serial.parity,
-            stopbits=config.serial.stopbits,
-            xonxoff=config.serial.xonxoff,
-            rtscts=config.serial.rtscts,
-            dsrdtr=config.serial.dsrdtr,
-        )
-        if config.serial.emulate_modem_signals:
-            # 実機に近づけるためにモデム制御線を明示的に立ち上げる。
-            try:
-                port.setDTR(True)
-                port.setRTS(True)
-            except (serial.SerialException, OSError) as exc:
-                raise SerialConnectionError("モデム制御線の設定に失敗しました。") from exc
-        return port
+        port_name = config.serial.port
+        if port_name == "auto":
+            resources = _create_virtual_pty(config.serial)
+            port_name = resources.app_slave
+        serial_kwargs: dict[str, object] = {
+            "port": port_name,
+            "baudrate": config.serial.baudrate,
+            "timeout": config.serial.timeout,
+            "write_timeout": config.serial.write_timeout,
+            "bytesize": config.serial.bytesize,
+            "parity": config.serial.parity,
+            "stopbits": config.serial.stopbits,
+            "xonxoff": config.serial.xonxoff,
+            "rtscts": config.serial.rtscts,
+            "dsrdtr": config.serial.dsrdtr,
+        }
+        if config.serial.exclusive is not None:
+            serial_kwargs["exclusive"] = config.serial.exclusive
+        port = serial.Serial(**serial_kwargs)
+        _apply_modem_signal_settings(port, config.serial)
+        display_port = port_name
+        if resources is not None:
+            _log_virtual_pty(resources)
+            if resources.symlink_path is not None:
+                display_port = str(resources.symlink_path)
+            else:
+                display_port = resources.peer_slave
+        return SerialPortHandle(port=port, display_port=display_port, resources=resources)
+    except TypeError as exc:
+        if resources is not None:
+            resources.close()
+        raise SerialConnectionError("serial.exclusive は未対応の環境です。") from exc
     except (serial.SerialException, OSError) as exc:
+        if resources is not None:
+            resources.close()
         reason = str(exc)
         if isinstance(exc, OSError):
             if exc.errno == errno.ENOENT:
@@ -255,11 +405,122 @@ def _open_serial_port(config: AppConfig) -> serial.Serial:
         ) from exc
 
 
+# 仮想TTYのペアを作成する。
+def _create_virtual_pty(serial_config: SerialConfig) -> VirtualPtyResources:
+    """仮想シリアルポートを生成してブリッジを起動する。"""
+    try:
+        master_a, slave_a = pty.openpty()
+        master_b, slave_b = pty.openpty()
+    except OSError as exc:
+        raise SerialConnectionError("仮想TTYの生成に失敗しました。") from exc
+
+    try:
+        for fd in (slave_a, slave_b):
+            tty.setraw(fd)
+        app_slave = os.ttyname(slave_a)
+        peer_slave = os.ttyname(slave_b)
+    except OSError as exc:
+        raise SerialConnectionError("仮想TTYの設定に失敗しました。") from exc
+    finally:
+        for fd in (slave_a, slave_b):
+            try:
+                os.close(fd)
+            except OSError:
+                continue
+
+    try:
+        _apply_pty_permissions(app_slave, serial_config)
+        _apply_pty_permissions(peer_slave, serial_config)
+        symlink_path, created_symlink = _create_pty_symlink(serial_config, peer_slave)
+    except SerialConnectionError:
+        for fd in (master_a, master_b):
+            try:
+                os.close(fd)
+            except OSError:
+                continue
+        raise
+
+    bridge = VirtualPtyBridge(master_a, master_b)
+    bridge.start()
+    return VirtualPtyResources(
+        bridge=bridge,
+        symlink_path=symlink_path,
+        created_symlink=created_symlink,
+        app_slave=app_slave,
+        peer_slave=peer_slave,
+    )
+
+
+# 仮想TTYのパーミッションを整える。
+def _apply_pty_permissions(path: str, serial_config: SerialConfig) -> None:
+    """仮想TTYの権限とグループを設定する。"""
+    if serial_config.pty_mode is None and serial_config.pty_group is None:
+        return
+    try:
+        if serial_config.pty_mode is not None:
+            os.chmod(path, serial_config.pty_mode)
+        if serial_config.pty_group is not None:
+            gid = grp.getgrnam(serial_config.pty_group).gr_gid
+            os.chown(path, -1, gid)
+    except KeyError as exc:
+        raise SerialConnectionError("serial.pty_group の指定が無効です。") from exc
+    except OSError as exc:
+        raise SerialConnectionError("仮想TTYの権限設定に失敗しました。") from exc
+
+
+# 仮想TTYのリンクを作成する。
+def _create_pty_symlink(serial_config: SerialConfig, peer_slave: str) -> tuple[Optional[Path], bool]:
+    """仮想TTYへのシンボリックリンクを作成する。"""
+    if serial_config.pty_link is None:
+        return None, False
+    link_path = Path(serial_config.pty_link)
+    if link_path.exists() or link_path.is_symlink():
+        if link_path.is_symlink():
+            try:
+                link_path.unlink()
+            except OSError as exc:
+                raise SerialConnectionError("既存のシンボリックリンクを削除できませんでした。") from exc
+        else:
+            raise SerialConnectionError("serial.pty_link のパスが既に存在しています。")
+    try:
+        link_path.symlink_to(peer_slave)
+    except OSError as exc:
+        raise SerialConnectionError("仮想TTYのリンク作成に失敗しました。") from exc
+    return link_path, True
+
+
+# モデム制御線の設定を行う。
+def _apply_modem_signal_settings(port: serial.Serial, serial_config: SerialConfig) -> None:
+    """指定があればDTR/RTSを明示的に設定する。"""
+    dtr = serial_config.dtr
+    rts = serial_config.rts
+    if serial_config.emulate_modem_signals and dtr is None and rts is None:
+        dtr = True
+        rts = True
+    if dtr is None and rts is None:
+        return
+    try:
+        if dtr is not None:
+            port.setDTR(dtr)
+        if rts is not None:
+            port.setRTS(rts)
+    except (serial.SerialException, OSError) as exc:
+        raise SerialConnectionError("モデム制御線の設定に失敗しました。") from exc
+
+
+# 仮想TTY作成時の情報をログ出力する。
+def _log_virtual_pty(resources: VirtualPtyResources) -> None:
+    """仮想TTYの作成結果をログに記録する。"""
+    logger.info("仮想TTYを作成しました (送信側: %s, 受信側: %s)", resources.app_slave, resources.peer_slave)
+    if resources.symlink_path is not None:
+        logger.info("仮想TTYリンク: %s -> %s", resources.symlink_path, resources.peer_slave)
+
+
 # 起動時にデバイス情報をログ出力する。
-def _log_device_info(device: InputDevice, config: AppConfig) -> None:
+def _log_device_info(device: InputDevice, serial_port: str) -> None:
     """入出力デバイスの情報をログに記録する。"""
     logger.info("入力デバイス: %s", device.path)
-    logger.info("シリアル送信先: %s", config.serial.port)
+    logger.info("シリアル送信先: %s", serial_port)
 
 
 # 入力デバイスをクローズ
@@ -357,6 +618,7 @@ def _send_payload_if_present(
         state=state,
         send_mode=output.send_mode,
         encoding=output.encoding,
+        encoding_errors=output.encoding_errors,
         dedup_window_seconds=output.dedup_window_seconds,
         serial_config=serial_config,
     )
@@ -405,7 +667,7 @@ def _run_event_loop_idle_timeout(config: AppConfig, device: InputDevice, *, keym
     output = config.output
     serial_config = config.serial
     with _open_serial_port(config) as port:
-        _log_device_info(device, config)
+        _log_device_info(device, port.display_port)
         while True:
             if state.text and state.last_input_time is not None:
                 now = time.monotonic()
@@ -472,7 +734,7 @@ def _run_event_loop_default(config: AppConfig, device: InputDevice, *, keymap: K
     output = config.output
     serial_config = config.serial
     with _open_serial_port(config) as port:
-        _log_device_info(device, config)
+        _log_device_info(device, port.display_port)
         try:
             event_iterator = device.read_loop()
         except OSError as exc:
@@ -497,6 +759,8 @@ def run_event_loop(config: AppConfig, *, keymap: KeyMapper = DEFAULT_KEYMAP) -> 
     if config.input.mode != "evdev":
         raise ValueError("input.mode は evdev のみサポートしています。")
 
+    _log_available_devices()
+    
     while True:
         device: InputDevice | None = None
         try:
