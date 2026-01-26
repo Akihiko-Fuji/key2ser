@@ -35,16 +35,29 @@ def _unsupported_platform_message(platform: str) -> str | None:
     return None
 
 
+# ログレベルの指定を検証して実際のレベル値に変換する。
+def _resolve_log_level(value: str) -> tuple[int, str | None]:
+    """ログレベルを解決し、必要なら警告メッセージを返す。"""
+    normalized = str(value).upper()
+    resolved = logging.getLevelName(normalized)
+    if isinstance(resolved, int):
+        return resolved, None
+    return logging.INFO, f"未対応のログレベル {value} が指定されたため INFO にフォールバックします。"
+
+
 # エントリポイントとして設定読み込みとイベントループを起動する。
 def main(argv: list[str] | None = None) -> int:
     """CLI起動時の設定読み込みと実行処理を行う。"""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
+    log_level, warning_message = _resolve_log_level(args.log_level)
     logging.basicConfig(
-        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
+        level=log_level,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    if warning_message is not None:
+        logging.warning("%s", warning_message)
 
     # 非対応プラットフォームでは実行を止めて明示的に終了する。
     platform_message = _unsupported_platform_message(sys.platform)
