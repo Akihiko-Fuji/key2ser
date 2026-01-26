@@ -660,6 +660,69 @@ def test_open_serial_port_emulates_modem_signals(monkeypatch) -> None:
     assert port.port.rts is True
 
 
+def test_open_serial_port_closes_on_modem_signal_error(monkeypatch) -> None:
+    class DummyBridge:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class DummyPort:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def setDTR(self, _value: bool) -> None:
+            raise OSError("signal error")
+
+        def close(self) -> None:
+            self.closed = True
+
+    bridge = DummyBridge()
+    resources = runner.VirtualPtyResources(
+        bridge=bridge,
+        symlink_path=None,
+        created_symlink=False,
+        app_slave="/dev/pts/1",
+        peer_slave="/dev/pts/2",
+    )
+    dummy_port = DummyPort()
+
+    monkeypatch.setattr(runner, "_create_virtual_pty", lambda _config: resources)
+    monkeypatch.setattr(runner.serial, "Serial", lambda **_kwargs: dummy_port)
+
+    config = AppConfig(
+        input=InputConfig(
+            mode="evdev",
+            device="/dev/input/event0",
+            vendor_id=None,
+            product_id=None,
+            device_name_contains=None,
+            prefer_event_has_keys=DEFAULT_PREFERRED_INPUT_KEYS,
+            grab=False,
+            reconnect_interval_seconds=0,
+        ),
+        serial=replace(_default_serial_config(), port="auto", dtr=True),
+        output=OutputConfig(
+            encoding="utf-8",
+            encoding_errors="strict",
+            line_end="\r\n",
+            line_end_mode="literal",
+            terminator_keys=DEFAULT_TERMINATOR_KEYS,
+            send_on_enter=True,
+            send_mode="on_enter",
+            idle_timeout_seconds=0.5,
+            dedup_window_seconds=0.2,
+        ),
+    )
+
+    with pytest.raises(runner.SerialConnectionError, match="モデム制御線の設定に失敗しました。"):
+        runner._open_serial_port(config)
+
+    assert dummy_port.closed is True
+    assert bridge.closed is True
+
+
 def test_open_serial_port_sets_modem_signals(monkeypatch) -> None:
     class DummyPort:
         def __init__(self) -> None:
