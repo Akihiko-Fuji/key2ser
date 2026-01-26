@@ -200,11 +200,97 @@ def test_log_available_devices_lists_entries(monkeypatch) -> None:
             self.path = path
             self.info = DummyInfo()
             self.name = "Dummy HID"
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    devices: list[DummyDevice] = []
+
+    def build_device(path: str) -> DummyDevice:
+        device = DummyDevice(path)
+        devices.append(device)
+        return device
 
     monkeypatch.setattr(runner, "list_devices", lambda: ["/dev/input/event0"])
-    monkeypatch.setattr(runner, "InputDevice", DummyDevice)
+    monkeypatch.setattr(runner, "InputDevice", build_device)
 
     runner._log_available_devices()
+
+
+    assert devices[0].closed is True
+
+
+def test_select_device_by_vid_pid_closes_unmatched_devices(monkeypatch) -> None:
+    class DummyInfo:
+        def __init__(self, vendor: int, product: int) -> None:
+            self.vendor = vendor
+            self.product = product
+
+    class DummyDevice:
+        def __init__(self, path: str, vendor: int, product: int) -> None:
+            self.path = path
+            self.info = DummyInfo(vendor, product)
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    devices = {
+        "/dev/input/event0": DummyDevice("/dev/input/event0", 0x1111, 0x2222),
+        "/dev/input/event1": DummyDevice("/dev/input/event1", 0x1234, 0x5678),
+    }
+
+    def build_device(path: str) -> DummyDevice:
+        return devices[path]
+
+    monkeypatch.setattr(runner, "InputDevice", build_device)
+
+    selected = runner._select_device_by_vid_pid(
+        devices.keys(),
+        vendor_id=0x1234,
+        product_id=0x5678,
+    )
+
+    assert selected is devices["/dev/input/event1"]
+    assert devices["/dev/input/event0"].closed is True
+    assert devices["/dev/input/event1"].closed is False
+
+
+def test_select_device_by_vid_pid_closes_multiple_matches(monkeypatch) -> None:
+    class DummyInfo:
+        def __init__(self, vendor: int, product: int) -> None:
+            self.vendor = vendor
+            self.product = product
+
+    class DummyDevice:
+        def __init__(self, path: str) -> None:
+            self.path = path
+            self.info = DummyInfo(0x1234, 0x5678)
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    devices = {
+        "/dev/input/event0": DummyDevice("/dev/input/event0"),
+        "/dev/input/event1": DummyDevice("/dev/input/event1"),
+    }
+
+    def build_device(path: str) -> DummyDevice:
+        return devices[path]
+
+    monkeypatch.setattr(runner, "InputDevice", build_device)
+
+    with pytest.raises(runner.DeviceNotFoundError, match="VID/PIDが一致するデバイスが複数あります。"):
+        runner._select_device_by_vid_pid(
+            devices.keys(),
+            vendor_id=0x1234,
+            product_id=0x5678,
+        )
+
+    assert devices["/dev/input/event0"].closed is True
+    assert devices["/dev/input/event1"].closed is True
 
 
 def test_open_serial_port_handles_serial_exception(monkeypatch) -> None:
