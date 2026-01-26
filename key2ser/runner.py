@@ -172,10 +172,70 @@ def _log_available_devices() -> None:
             _close_input_device(device)
 
 
+# 入力デバイスのヒント文字列を正規化する。
+def _normalize_device_hint(value: Optional[str]) -> str:
+    """比較のために小文字化した文字列を返す。"""
+    return value.lower() if value else ""
+
+
+# 入力デバイスが指定キーを持つか判定する。
+def _device_has_keys(device: InputDevice, keys: Iterable[str]) -> bool:
+    """EV_KEYの対応キーに指定キーが含まれるか確認する。"""
+    try:
+        caps = device.capabilities().get(ecodes.EV_KEY, [])
+    except OSError as exc:
+        logger.debug("入力デバイスのcapabilities取得に失敗しました: %s", exc)
+        return False
+    if not caps:
+        return False
+    key_set = set(caps)
+    for key in keys:
+        code = getattr(ecodes, key, None)
+        if code is not None and code in key_set:
+            return True
+    return False
+
+
+# 入力デバイスのスコアリングを行う。
+def _score_device(device: InputDevice, config: InputConfig) -> int:
+    """デバイス選択のためのスコアを計算する。"""
+    score = 0
+    if config.prefer_event_has_keys and _device_has_keys(device, config.prefer_event_has_keys):
+        score += 2
+    if config.device_name_contains:
+        hint = config.device_name_contains.lower()
+        name = _normalize_device_hint(getattr(device, "name", None))
+        phys = _normalize_device_hint(getattr(device, "phys", None))
+        uniq = _normalize_device_hint(getattr(device, "uniq", None))
+        if hint in name or hint in phys or hint in uniq:
+            score += 1
+    return score
+
+
+def _select_single_device(matches: list[InputDevice], config: InputConfig) -> Optional[InputDevice]:
+    """複数候補からスコア優先で1件を選択する。"""
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    scored = [(device, _score_device(device, config)) for device in matches]
+    scored.sort(key=lambda item: item[1], reverse=True)
+    best_device, best_score = scored[0]
+    if best_score > 0 and scored[1][1] < best_score:
+        for device, _score in scored:
+            if device is not best_device:
+                _close_input_device(device)
+        # 似たHIDが複数あると誤送信の恐れがあるため、有意差がある場合のみ自動選別する。
+        logger.info("入力デバイスを自動選別しました: %s", best_device.path)
+        return best_device
+    return None
+
+
+
 # VID/PIDで一致する入力デバイスを1つ選択する。
-def _select_device_by_vid_pid(devices: Iterable[str], vendor_id: int, product_id: int) -> InputDevice:
+def _select_device_by_vid_pid(devices: Iterable[str], config: InputConfig) -> InputDevice:
     """候補のデバイスからVID/PID一致のものを検索して返す。"""
-    matches = []
+    matches: list[InputDevice] = []
     access_error = False
     for path in devices:
         try:
@@ -185,7 +245,7 @@ def _select_device_by_vid_pid(devices: Iterable[str], vendor_id: int, product_id
             logger.warning("入力デバイスのオープンに失敗しました: %s", path)
             logger.debug("入力デバイスの詳細エラー: %s", exc)
             continue
-        if _match_device_info(device, vendor_id=vendor_id, product_id=product_id):
+        if _match_device_info(device, vendor_id=config.vendor_id, product_id=config.product_id):
             matches.append(device)
         else:
             # 非一致のデバイスは保持しないためクローズする。
@@ -195,12 +255,13 @@ def _select_device_by_vid_pid(devices: Iterable[str], vendor_id: int, product_id
         if access_error:
             raise DeviceAccessError("入力デバイスのオープンに失敗しました。")
         raise DeviceNotFoundError("指定されたVID/PIDに一致する入力デバイスが見つかりません。")
-    if len(matches) > 1:
-        # 複数ヒットは誤送信を避けるため明示指定を促す。
-        for device in matches:
-            _close_input_device(device)
-        raise DeviceNotFoundError("VID/PIDが一致するデバイスが複数あります。deviceを指定してください。")
-    return matches[0]
+    selected = _select_single_device(matches, config)
+    if selected is not None:
+        return selected
+    # 複数ヒットは誤送信を避けるため明示指定を促す。
+    for device in matches:
+        _close_input_device(device)
+    raise DeviceNotFoundError("VID/PIDが一致するデバイスが複数あります。deviceを指定してください。")
 
 
 # 設定に従って入力デバイスを開く。
@@ -222,7 +283,7 @@ def open_input_device(config: InputConfig) -> InputDevice:
             devices = list_devices()
         except OSError as exc:
             raise DeviceAccessError("入力デバイス一覧の取得に失敗しました。") from exc
-        return _select_device_by_vid_pid(devices, config.vendor_id, config.product_id)
+        return _select_device_by_vid_pid(devices, config)
 
 
     raise DeviceNotFoundError("input.device または vendor_id/product_id を指定してください。")
@@ -547,6 +608,7 @@ def _handle_key_down(
     state: BufferState,
     keymap: KeyMapper,
     line_end: str,
+    terminator_keys: Iterable[str],
     send_on_enter: bool,
     send_mode: str,
 ) -> Optional[str]:
@@ -557,7 +619,7 @@ def _handle_key_down(
     if keycode in KANA_TOGGLE_KEYCODES:
         state.kana_mode = not state.kana_mode
         return None
-    if keycode == "KEY_ENTER" and send_mode == "on_enter":
+    if keycode in terminator_keys and send_mode == "on_enter":
         # バーコードリーダーはEnterで終端することが多いため、ここでまとめて送信する。
         payload = state.text + line_end if state.text or send_on_enter else None
         _reset_buffer(state)
@@ -654,6 +716,7 @@ def _process_key_event(
                 state,
                 keymap,
                 output.line_end,
+                output.terminator_keys,
                 output.send_on_enter,
                 output.send_mode,
             )
