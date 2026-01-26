@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import configparser
+import logging
 from pathlib import Path
 import re
 from typing import Optional
 
+from evdev import ecodes
 
 @dataclass(frozen=True)
 class InputConfig:
@@ -67,6 +69,8 @@ DEFAULT_PREFERRED_INPUT_KEYS = (
     *tuple(f"KEY_{digit}" for digit in range(10)),
 )
 DEFAULT_TERMINATOR_KEYS = ("KEY_ENTER", "KEY_KPENTER")
+
+logger = logging.getLogger(__name__)
 
 # 任意指定の数値項目をintに変換する。
 def _parse_optional_int(value: Optional[str], *, field_name: str) -> Optional[int]:
@@ -187,7 +191,25 @@ def _parse_line_end(line_end: str, *, line_end_mode: str) -> str:
         raise ValueError("output.line_end に無効なエスケープシーケンスがあります。") from exc
 
 # カンマ区切りのキー一覧をパースする。
-def _parse_key_list(value: Optional[str], *, default: Optional[tuple[str, ...]]) -> tuple[str, ...]:
+def _warn_unknown_keys(keys: list[str], *, field_name: str) -> None:
+    """未知のキーコードが含まれる場合に警告を出す。"""
+    unknown = [key for key in keys if not hasattr(ecodes, key)]
+    if not unknown:
+        return
+    logger.warning(
+        "%s に未対応のキーが含まれています: %s",
+        field_name,
+        ", ".join(unknown),
+    )
+
+
+# カンマ区切りのキー一覧をパースする。
+def _parse_key_list(
+    value: Optional[str],
+    *,
+    default: Optional[tuple[str, ...]],
+    field_name: str,
+) -> tuple[str, ...]:
     """キーコードのリスト設定を正規化して返す。"""
     if value is None:
         return default or tuple()
@@ -195,6 +217,7 @@ def _parse_key_list(value: Optional[str], *, default: Optional[tuple[str, ...]])
     if not stripped:
         return tuple()
     keys = [item.strip().upper() for item in stripped.split(",") if item.strip()]
+    _warn_unknown_keys(keys, field_name=field_name)
     return tuple(keys)
 
 
@@ -225,6 +248,7 @@ def load_config(path: Path) -> AppConfig:
     prefer_event_has_keys = _parse_key_list(
         parser.get("input", "prefer_event_has_keys", fallback=None),
         default=DEFAULT_PREFERRED_INPUT_KEYS,
+        field_name="input.prefer_event_has_keys",
     )
     grab = _get_bool(parser, "input", "grab", False)
     reconnect_interval_seconds = parser.getfloat("input", "reconnect_interval_seconds", fallback=3.0)
@@ -279,6 +303,7 @@ def load_config(path: Path) -> AppConfig:
     terminator_keys = _parse_key_list(
         parser.get("output", "terminator_keys", fallback=None),
         default=DEFAULT_TERMINATOR_KEYS,
+        field_name="output.terminator_keys",
     )
     send_on_enter = _get_bool(parser, "output", "send_on_enter", True)
     send_mode = parser.get("output", "send_mode", fallback="on_enter").strip().lower() or "on_enter"
